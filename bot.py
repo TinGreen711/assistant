@@ -83,6 +83,7 @@ from priority_engine import build_daily_plan, build_focus_hints
 from daily_cycle import generate_daily_closing
 from strategy_profile import build_strategy_profile
 from proactive import build_checkin, build_evening_reminder, assess_pulse, build_midday_nudge, build_streak_guard
+from session_memory import init_session_memory_db, save_memory_note, get_recent_memory
 from study_tracker import (
     init_study_db,
     log_session,
@@ -458,6 +459,7 @@ async def run_daily_closing(message_target, chat_id: int) -> None:
 
     save_daily_closing(closing_text)
     mark_daily_closed(chat_id, closed=True)
+    save_memory_note(chat_id=chat_id, note_type="closing", content=closing_text)
 
     append_daily_entry(
         f"### Daily focus status\n"
@@ -548,6 +550,10 @@ async def send_action_options(
         combined_hints += "\n\n" + strategy["prompt_hints"]
     if pulse["prompt_hints"]:
         combined_hints += "\n\n" + pulse["prompt_hints"]
+
+    recent_memory = get_recent_memory(message_target.chat.id, days=7)
+    if recent_memory:
+        combined_hints += "\n\nПамять из прошлых сессий:\n" + recent_memory
 
     data = generate_options(
         user_text,
@@ -1231,6 +1237,12 @@ async def handle_result_choice(
         f"Вывод:\n{review['lesson']}"
     )
 
+    save_memory_note(
+        chat_id=query.message.chat.id,
+        note_type="lesson",
+        content=f"{selected_option} → {review['lesson']}",
+    )
+
     if mode == "learning":
         await query.message.reply_text(
             "📚 Какую тему изучал?",
@@ -1507,6 +1519,7 @@ def main() -> None:
     init_state_db()
     init_outcomes_db()
     init_study_db()
+    init_session_memory_db()
 
     persistence = PicklePersistence(filepath=str(Path(ASSISTANT_DB_PATH).parent / "bot_persistence.pkl"))
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).persistence(persistence).build()
