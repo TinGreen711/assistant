@@ -11,6 +11,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    PicklePersistence,
     filters,
     JobQueue,
 )
@@ -25,6 +26,7 @@ from config import (
     MAX_DECISION_DEPTH,
     DEBUG,
     USER_TIMEZONE,
+    ASSISTANT_DB_PATH,
     validate_config,
 )
 from brain import generate_options
@@ -57,6 +59,8 @@ from state import (
     set_proactive_settings,
     get_proactive_settings,
     list_proactive_enabled_sessions,
+    set_gilfoyle_mode,
+    get_gilfoyle_mode,
 )
 from outcomes import (
     init_outcomes_db,
@@ -78,7 +82,15 @@ from domains import classify_domain, assess_domain_alignment, DOMAINS
 from priority_engine import build_daily_plan, build_focus_hints
 from daily_cycle import generate_daily_closing
 from strategy_profile import build_strategy_profile
-from proactive import build_checkin, build_evening_reminder, assess_pulse
+from proactive import build_checkin, build_evening_reminder, assess_pulse, build_midday_nudge, build_streak_guard
+from study_tracker import (
+    init_study_db,
+    log_session,
+    get_streak,
+    format_study_stats,
+    TOPICS,
+)
+from skills_path import format_path, format_path_short
 
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -95,11 +107,11 @@ def today_str() -> str:
 
 
 def build_action_keyboard(options: list[str]) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text=option, callback_data=f"act_{i}")]
-        for i, option in enumerate(options)
+    buttons = [
+        InlineKeyboardButton(text=str(i + 1), callback_data=f"act_{i}")
+        for i in range(len(options))
     ]
-    return InlineKeyboardMarkup(rows)
+    return InlineKeyboardMarkup([buttons])
 
 
 def build_result_keyboard(buttons: list[str]) -> InlineKeyboardMarkup:
@@ -118,18 +130,23 @@ def build_failure_reason_keyboard(buttons: list[str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def build_main_menu_keyboard() -> InlineKeyboardMarkup:
+def build_main_menu_keyboard(gilfoyle: bool = False) -> InlineKeyboardMarkup:
+    gilfoyle_label = "👤 Обычный режим" if gilfoyle else "🤖 Режим Гилфойла"
+    gilfoyle_cmd = "cmd_gilfoyle_off" if gilfoyle else "cmd_gilfoyle_on"
     rows = [
         [InlineKeyboardButton(text="🗓 План дня", callback_data="cmd_plan")],
         [InlineKeyboardButton(text="☀️ Check-in", callback_data="cmd_checkin")],
         [InlineKeyboardButton(text="📡 Pulse", callback_data="cmd_pulse")],
         [InlineKeyboardButton(text="🌙 Закрыть день", callback_data="cmd_close")],
-        [InlineKeyboardButton(text="🎯 Цель недели", callback_data="cmd_weekgoal")],
-        [InlineKeyboardButton(text="🧭 Вектор месяца", callback_data="cmd_monthfocus")],
-        [InlineKeyboardButton(text="🧠 Strategy profile", callback_data="cmd_strategy")],
-        [InlineKeyboardButton(text="📊 Weekly summary", callback_data="cmd_weekly")],
-        [InlineKeyboardButton(text="🔔 Proactive on", callback_data="cmd_proactive_on")],
-        [InlineKeyboardButton(text="🔕 Proactive off", callback_data="cmd_proactive_off")],
+        [InlineKeyboardButton(text="🎯 Цель недели", callback_data="cmd_weekgoal"),
+         InlineKeyboardButton(text="🧭 Вектор месяца", callback_data="cmd_monthfocus")],
+        [InlineKeyboardButton(text="📚 Обучение /study", callback_data="cmd_study"),
+         InlineKeyboardButton(text="🗺 Путь /path", callback_data="cmd_path")],
+        [InlineKeyboardButton(text="🧠 Strategy", callback_data="cmd_strategy"),
+         InlineKeyboardButton(text="📊 Weekly", callback_data="cmd_weekly")],
+        [InlineKeyboardButton(text="🔔 Proactive on", callback_data="cmd_proactive_on"),
+         InlineKeyboardButton(text="🔕 Proactive off", callback_data="cmd_proactive_off")],
+        [InlineKeyboardButton(text=gilfoyle_label, callback_data=gilfoyle_cmd)],
         [InlineKeyboardButton(text="♻️ Сбросить сессию", callback_data="cmd_reset")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -149,6 +166,14 @@ def build_plan_time_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="15–30 минут", callback_data="plan_time_short")],
         [InlineKeyboardButton(text="30–90 минут", callback_data="plan_time_medium")],
         [InlineKeyboardButton(text="90+ минут", callback_data="plan_time_long")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def build_study_topic_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=f"study_topic_{key}")]
+        for key, label in TOPICS.items()
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -206,7 +231,7 @@ def remove_jobs_for_chat(job_queue: JobQueue | None, chat_id: int) -> None:
     if not job_queue:
         return
 
-    for name in [f"morning_{chat_id}", f"evening_{chat_id}"]:
+    for name in [f"morning_{chat_id}", f"evening_{chat_id}", f"midday_{chat_id}", f"streak_{chat_id}"]:
         jobs = job_queue.get_jobs_by_name(name)
         for job in jobs:
             job.schedule_removal()
@@ -245,6 +270,18 @@ def schedule_jobs_for_chat(job_queue: JobQueue | None, chat_id: int) -> None:
         chat_id=chat_id,
         name=f"evening_{chat_id}",
     )
+    job_queue.run_daily(
+        midday_nudge_job,
+        time=time(hour=14, minute=0, tzinfo=TZ),
+        chat_id=chat_id,
+        name=f"midday_{chat_id}",
+    )
+    job_queue.run_daily(
+        streak_guard_job,
+        time=time(hour=18, minute=20, tzinfo=TZ),
+        chat_id=chat_id,
+        name=f"streak_{chat_id}",
+    )
 
 
 def restore_proactive_jobs(job_queue: JobQueue | None) -> None:
@@ -277,6 +314,30 @@ async def evening_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def midday_nudge_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = context.job.chat_id
+    payload = build_midday_nudge(chat_id)
+    if payload is None:
+        return
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=payload["text"],
+        reply_markup=build_main_menu_keyboard(),
+    )
+
+
+async def streak_guard_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = context.job.chat_id
+    payload = build_streak_guard(chat_id)
+    if payload is None:
+        return
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=payload["text"],
+        reply_markup=build_main_menu_keyboard(),
+    )
+
+
 async def transcribe_voice(file_path: str) -> str:
     with open(file_path, "rb") as audio:
         transcript = client.audio.transcriptions.create(
@@ -286,10 +347,11 @@ async def transcribe_voice(file_path: str) -> str:
     return (transcript.text or "").strip()
 
 
-async def send_main_menu(message_target) -> None:
+async def send_main_menu(message_target, chat_id: int | None = None) -> None:
+    gf = get_gilfoyle_mode(chat_id) if chat_id else False
     await message_target.reply_text(
         "Главное меню:",
-        reply_markup=build_main_menu_keyboard(),
+        reply_markup=build_main_menu_keyboard(gilfoyle=gf),
     )
 
 
@@ -487,7 +549,11 @@ async def send_action_options(
     if pulse["prompt_hints"]:
         combined_hints += "\n\n" + pulse["prompt_hints"]
 
-    data = generate_options(user_text, extra_hints=combined_hints)
+    data = generate_options(
+        user_text,
+        extra_hints=combined_hints,
+        gilfoyle_mode=get_gilfoyle_mode(message_target.chat.id),
+    )
     mode = str(data.get("mode", pre_mode)).strip() or pre_mode
     text = (data.get("text") or "Выбери действие:").strip()
     options = data.get("options") or []
@@ -520,8 +586,12 @@ async def send_action_options(
     if focus_notice_parts:
         notice = "\n\n".join(focus_notice_parts) + "\n\n"
 
+    numbered = "\n".join(f"{i + 1}. {opt}" for i, opt in enumerate(options))
     keyboard = build_action_keyboard(options)
-    sent = await message_target.reply_text(notice + text, reply_markup=keyboard)
+    sent = await message_target.reply_text(
+        notice + text + "\n\n" + numbered,
+        reply_markup=keyboard,
+    )
 
     store = get_message_store(context)
     store[str(sent.message_id)] = {
@@ -578,7 +648,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "Сначала я предложу 3 действия.\n"
         "После выбора попрошу отметить результат."
     )
-    await send_main_menu(update.message)
+    await send_main_menu(update.message, update.effective_chat.id)
 
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -587,7 +657,7 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if update.message:
         await update.message.reply_text("Сессия сброшена. Начинаем заново.")
-        await send_main_menu(update.message)
+        await send_main_menu(update.message, update.effective_chat.id)
 
 
 async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -665,10 +735,45 @@ async def proactive_off_command(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text("Проактивный режим выключен.")
 
 
+async def study_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    text = format_study_stats(update.effective_chat.id)
+    await update.message.reply_text(text)
+
+
+async def path_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    gf = get_gilfoyle_mode(update.effective_chat.id)
+    text = format_path(update.effective_chat.id, gilfoyle=gf)
+    await update.message.reply_text(text)
+
+
+async def gilfoyle_on_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    chat_id = update.effective_chat.id
+    set_gilfoyle_mode(chat_id, True)
+    await update.message.reply_text(
+        "🤖 Режим Гилфойла включён.\nНикакой мотивации. Только факты."
+    )
+    await send_main_menu(update.message, chat_id)
+
+
+async def gilfoyle_off_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    chat_id = update.effective_chat.id
+    set_gilfoyle_mode(chat_id, False)
+    await update.message.reply_text("👤 Обычный режим включён.")
+    await send_main_menu(update.message, chat_id)
+
+
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
-    await send_main_menu(update.message)
+    await send_main_menu(update.message, update.effective_chat.id)
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -705,7 +810,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 f"Область: {DOMAINS.get(domain, 'Общее')}\n"
                 f"Цель: {user_text}"
             )
-            await send_main_menu(update.message)
+            await send_main_menu(update.message, update.effective_chat.id)
             return
 
         if active_stage == "await_monthly_focus_text":
@@ -728,7 +833,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 f"Область: {DOMAINS.get(domain, 'Общее')}\n"
                 f"Вектор: {user_text}"
             )
-            await send_main_menu(update.message)
+            await send_main_menu(update.message, update.effective_chat.id)
             return
 
     await send_action_options(
@@ -1126,6 +1231,12 @@ async def handle_result_choice(
         f"Вывод:\n{review['lesson']}"
     )
 
+    if mode == "learning":
+        await query.message.reply_text(
+            "📚 Какую тему изучал?",
+            reply_markup=build_study_topic_keyboard(),
+        )
+
     protocol_depth_limit = get_max_depth(mode)
     effective_depth_limit = min(MAX_DECISION_DEPTH, protocol_depth_limit)
 
@@ -1303,6 +1414,31 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await run_pulse(query.message, query.message.chat.id)
         return
 
+    if data == "cmd_study":
+        text = format_study_stats(query.message.chat.id)
+        await query.message.reply_text(text)
+        return
+
+    if data == "cmd_path":
+        gf = get_gilfoyle_mode(query.message.chat.id)
+        text = format_path(query.message.chat.id, gilfoyle=gf)
+        await query.message.reply_text(text)
+        return
+
+    if data == "cmd_gilfoyle_on":
+        chat_id = query.message.chat.id
+        set_gilfoyle_mode(chat_id, True)
+        await query.message.reply_text("🤖 Режим Гилфойла включён. Никакой мотивации. Только факты.")
+        await send_main_menu(query.message, chat_id)
+        return
+
+    if data == "cmd_gilfoyle_off":
+        chat_id = query.message.chat.id
+        set_gilfoyle_mode(chat_id, False)
+        await query.message.reply_text("👤 Обычный режим включён.")
+        await send_main_menu(query.message, chat_id)
+        return
+
     if data == "cmd_proactive_on":
         chat_id = query.message.chat.id
         set_proactive_settings(chat_id, enabled=True)
@@ -1320,6 +1456,15 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         remove_jobs_for_chat(context.application.job_queue, chat_id)
         append_daily_entry("### Proactive disabled")
         await query.message.reply_text("Проактивный режим выключен.")
+        return
+
+    if data.startswith("study_topic_"):
+        topic = data.replace("study_topic_", "", 1)
+        chat_id = query.message.chat.id
+        log_session(chat_id, topic)
+        label = TOPICS.get(topic, topic)
+        streak = get_streak(chat_id)
+        await query.edit_message_text(f"✅ {label} — записано\n🔥 Стрик: {streak} дн.")
         return
 
     if data.startswith("plan_"):
@@ -1361,8 +1506,10 @@ def main() -> None:
     validate_config()
     init_state_db()
     init_outcomes_db()
+    init_study_db()
 
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    persistence = PicklePersistence(filepath=str(Path(ASSISTANT_DB_PATH).parent / "bot_persistence.pkl"))
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).persistence(persistence).build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("reset", reset_command))
@@ -1376,6 +1523,10 @@ def main() -> None:
     app.add_handler(CommandHandler("pulse", pulse_command))
     app.add_handler(CommandHandler("proactive_on", proactive_on_command))
     app.add_handler(CommandHandler("proactive_off", proactive_off_command))
+    app.add_handler(CommandHandler("study", study_command))
+    app.add_handler(CommandHandler("path", path_command))
+    app.add_handler(CommandHandler("gilfoyle_on", gilfoyle_on_command))
+    app.add_handler(CommandHandler("gilfoyle_off", gilfoyle_off_command))
     app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))

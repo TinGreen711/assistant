@@ -18,6 +18,14 @@ from protocols import build_protocol_prompt, get_protocol
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
+GILFOYLE_PROMPT = """
+Ты Гилфойл. Без мотивации. Без восклицаний. Без похвал.
+Только факты и конкретные действия.
+Если плохо — говоришь прямо. Если хорошо — тоже прямо.
+Три варианта. Коротко. По делу.
+Верни только JSON по схеме.
+""".strip()
+
 SYSTEM_PROMPT = """
 Ты личный ассистент по продуктивности и планомерному развитию.
 
@@ -325,10 +333,11 @@ def _build_prompt(user_text: str, extra_hints: str = "") -> tuple[str, Dict]:
     return prompt, route
 
 
-def _try_structured_response(prompt: str) -> Optional[Dict]:
+def _try_structured_response(prompt: str, gilfoyle_mode: bool = False) -> Optional[Dict]:
+    system = GILFOYLE_PROMPT if gilfoyle_mode else SYSTEM_PROMPT
     response = client.responses.create(
         model=OPENAI_CHAT_MODEL,
-        instructions=SYSTEM_PROMPT,
+        instructions=system,
         input=prompt,
         text={
             "format": {
@@ -346,10 +355,11 @@ def _try_structured_response(prompt: str) -> Optional[Dict]:
     return _extract_json(raw)
 
 
-def _try_plain_response(prompt: str) -> Optional[Dict]:
+def _try_plain_response(prompt: str, gilfoyle_mode: bool = False) -> Optional[Dict]:
+    system = GILFOYLE_PROMPT if gilfoyle_mode else SYSTEM_PROMPT
     response = client.responses.create(
         model=OPENAI_CHAT_MODEL,
-        instructions=SYSTEM_PROMPT,
+        instructions=system,
         input=prompt,
         max_output_tokens=MAX_OUTPUT_TOKENS,
         store=False,
@@ -368,19 +378,19 @@ def _try_plain_response(prompt: str) -> Optional[Dict]:
     return None
 
 
-def generate_options(user_text: str, extra_hints: str = "") -> Dict:
+def generate_options(user_text: str, extra_hints: str = "", gilfoyle_mode: bool = False) -> Dict:
     prompt, route = _build_prompt(user_text, extra_hints=extra_hints)
     mode = route["mode"]
 
     try:
-        data = _try_structured_response(prompt)
+        data = _try_structured_response(prompt, gilfoyle_mode=gilfoyle_mode)
         if data:
             return _postprocess(data, mode, user_text)
     except Exception:
         pass
 
     try:
-        data = _try_plain_response(prompt)
+        data = _try_plain_response(prompt, gilfoyle_mode=gilfoyle_mode)
         if data:
             return _postprocess(data, mode, user_text)
     except Exception:

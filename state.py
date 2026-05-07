@@ -86,6 +86,7 @@ def init_state_db() -> None:
             "morning_minute": f"INTEGER DEFAULT {DEFAULT_MORNING_MINUTE}",
             "evening_hour": f"INTEGER DEFAULT {DEFAULT_EVENING_HOUR}",
             "evening_minute": f"INTEGER DEFAULT {DEFAULT_EVENING_MINUTE}",
+            "gilfoyle_mode": "INTEGER DEFAULT 0",
         }
 
         for column_name, column_type in new_columns.items():
@@ -403,6 +404,15 @@ def build_long_horizon_context(chat_id: int) -> Dict[str, Any]:
         "summary_text": "\n".join(summary_lines).strip(),
         "prompt_hints": "\n".join(prompt_lines).strip(),
     }
+
+
+def set_gilfoyle_mode(chat_id: int, enabled: bool) -> None:
+    update_session_state(chat_id=chat_id, gilfoyle_mode=1 if enabled else 0)
+
+
+def get_gilfoyle_mode(chat_id: int) -> bool:
+    state = get_session_state(chat_id) or {}
+    return bool(state.get("gilfoyle_mode", 0))
 
 
 def clear_session_state(chat_id: int) -> None:

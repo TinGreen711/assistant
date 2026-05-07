@@ -53,7 +53,6 @@ HIGH_ENERGY_KEYWORDS = [
 
 ASSISTANT_BUILDING_KEYWORDS = [
     "ассистент",
-    "бот",
     "telegram",
     "телеграм",
     "openai",
@@ -88,6 +87,26 @@ LEARNING_KEYWORDS = [
     "python",
     "код",
     "программ",
+    "systemd",
+    "сеть",
+    "сети",
+    "сетях",
+    "networking",
+    "git",
+    "github",
+    "nginx",
+    "ssh",
+    "bash",
+    "скрипт",
+    "команд",
+    "терминал",
+    "сервер",
+    "деплой",
+    "deploy",
+    "контейнер",
+    "разобраться",
+    "понять",
+    "практик",
 ]
 
 CHAOS_KEYWORDS = [

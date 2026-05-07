@@ -3,15 +3,17 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+from zoneinfo import ZoneInfo
 
-from config import ASSISTANT_DB_PATH
+from config import ASSISTANT_DB_PATH, USER_TIMEZONE
 
 
 DB_PATH = Path(ASSISTANT_DB_PATH)
+TZ = ZoneInfo(USER_TIMEZONE)
 
 
 def _now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _connect() -> sqlite3.Connection:
