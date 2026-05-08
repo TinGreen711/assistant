@@ -1,0 +1,9 @@
+name: Check
+on: [push]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Check Python syntax
+        run: python -m py_compile bot.py && echo 'OK'
