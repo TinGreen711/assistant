@@ -5,27 +5,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Running the bot
 
 ```bash
-# Activate the virtual environment first
 source .venv/bin/activate
-
-# Run the bot
 python bot.py
 
-# Check Python syntax (same as CI)
+# Syntax check (same as CI)
 python -m py_compile bot.py
 ```
 
 ## Environment
 
-Copy `.env` values — required variables:
-
+Required in `.env`:
 ```
 TELEGRAM_BOT_TOKEN=...
 OPENAI_API_KEY=...
 ```
 
-Optional overrides (with defaults):
-
+Optional (shown with defaults):
 ```
 OPENAI_CHAT_MODEL=gpt-4.1-mini
 OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
@@ -33,56 +28,83 @@ ASSISTANT_DB_PATH=data/assistant.db
 OBSIDIAN_ROOT=data/obsidian
 USER_TIMEZONE=Asia/Tashkent
 MAX_OUTPUT_TOKENS=260
+MAX_DECISION_DEPTH=3
 DAILY_MEMORY_LIMIT=5
 ```
 
 ## Architecture
 
-This is a single-user Telegram productivity bot. `bot.py` is the monolith — it owns all handler registration, job scheduling, and keyboard construction. Everything else is a module imported by `bot.py`.
+A single-user Telegram bot with two purposes: productivity advisor (suggests 3 next actions via OpenAI) and SRE learning platform (quiz, practice tasks, flashcards, incident scenarios).
 
-**Request flow:**
-1. User sends a message → `handle_text` in `bot.py`
-2. `router.py` → `classify_request()` scores the message against keyword lists and returns a `mode` (e.g. `low_time`, `learning`, `chaos`)
-3. `brain.py` → `generate_options()` builds an OpenAI prompt from the mode, session state, memory profile, and adaptation hints, then returns 3 JSON action options
-4. Options are displayed as numbered inline keyboard buttons; the user picks one
-5. The choice triggers a `res_N` callback → bot enters execution tracking, prompts for completion
+`bot.py` is the monolith — all handlers, keyboards, and job scheduling live there. Everything else is a module imported by it.
+
+**Core request flow:**
+1. Text message → `handle_text` → `router.py:classify_request()` scores message against keyword lists → returns a `mode` (e.g. `low_time`, `learning`, `chaos`)
+2. `adaptation.py:build_adaptation_hints()` reads recent outcomes for this mode → determines strategy (`simplify` / `advance` / `neutral`)
+3. `brain.py:generate_options()` builds prompt from mode + protocol rules + session state + memory profile + adaptation hints → calls OpenAI → returns 3 JSON action options
+4. Options shown as numbered inline buttons; user picks one
+5. User reports result → `outcomes.py:log_outcome()` persists success/blocked/skip → feeds back into step 2 on the next request
+
+**Adaptation feedback loop** (`outcomes.py` → `adaptation.py` → `brain.py`):
+- Two consecutive `blocked` results in same mode → strategy `simplify_hard` (much easier step)
+- One `blocked` → `simplify`
+- Two consecutive `success` → `advance` (slightly harder)
+- `adaptation.py:filter_options()` also deduplicates against recent actions using Jaccard similarity
+
+**Voice messages:** `handle_voice` transcribes with `OPENAI_TRANSCRIBE_MODEL`, then feeds text through the same flow as text messages.
 
 **State and persistence:**
-- `state.py` — SQLite-backed session state per `chat_id` (active mode, focus, daily plan, weekly/monthly goals, proactive settings, Gilfoyle mode)
-- `memory.py` — Obsidian markdown files under `OBSIDIAN_ROOT` (profile, daily logs, decisions, summaries). Used to build long-term context for the AI prompt.
-- `data/bot_persistence.pkl` — python-telegram-bot `PicklePersistence` for conversation state across restarts
-- `data/assistant.db` — SQLite for all structured data (study sessions, quiz results, task completions, XP, achievements, flash progress)
+- `state.py` — SQLite session state per `chat_id`: active mode/request/action, daily plan, weekly/monthly goals, proactive settings, Gilfoyle mode
+- `memory.py` — Obsidian markdown under `OBSIDIAN_ROOT`: profile goals/constraints, daily logs, decisions, weekly summaries — fed into the AI prompt as long-term context
+- `session_memory.py` — short-term notes in SQLite (`lesson`, `closing`, `plan` types); last 7 days injected into AI prompt
+- `data/bot_persistence.pkl` — python-telegram-bot `PicklePersistence` for PTB-internal conversation state
+- `data/assistant.db` — SQLite for all structured data
 
-**Learning modules** (each has `init_*_db()`, content data, and formatting helpers):
-- `quiz.py` — 5-question multiple-choice quizzes per topic; results tracked in `quiz_results`
-- `tasks.py` — hands-on CLI practice tasks with commands and hints; tracked in `task_completions`
-- `thinking.py` — SRE incident scenario walkthroughs with AI-evaluated user plans; tracked in `thinking_sessions`
-- `flashcards.py` — spaced-repetition IT vocabulary cards; intervals `[1, 3, 7, 14]` days by streak; tracked in `flash_progress`
-- `study_tracker.py` — logs free-form study sessions by topic; drives streak counting
+## Module reference
+
+**Intelligence pipeline:**
+- `router.py` — keyword/regex scoring → `mode`; run standalone to test classification
+- `protocols.py` — per-mode `Protocol` dataclass: allowed/forbidden actions, completion buttons, `max_depth`
+- `adaptation.py` — `build_adaptation_hints()`, `filter_options()`, `complete_options()`
+- `outcomes.py` — `log_outcome()`, `get_recent_outcomes()`, `build_outcome_hints()`
+- `brain.py` — `generate_options()`, `SYSTEM_PROMPT`, `GILFOYLE_PROMPT`, `JSON_SCHEMA`; Gilfoyle mode is toggled globally per chat
+
+**Daily / weekly flow:**
+- `priority_engine.py` — `build_daily_plan()`, `build_focus_hints()` using energy/time inputs
+- `daily_cycle.py` — daily closing summary
+- `morning_brief.py` — morning brief text + `IT_WORDS` list (source for flashcards)
+- `weekly_summary.py` — `generate_weekly_summary()` via OpenAI
+- `proactive.py` — scheduled messages: check-in, midday nudge, evening reminder, pulse, streak guard; jobs restored on restart via `restore_proactive_jobs()`
+- `domains.py` — 6 life domains: `assistant_project`, `income`, `learning`, `work`, `health`, `family`
+- `strategy_profile.py` — strategic profile context injected into proactive messages
+
+**Learning modules** — each has `init_*_db()` called in `main()`:
+- `quiz.py` — 5-question multiple-choice; topics: `linux`, `networks`, `docker`, `git`, `bash`, `systemd`, `kubernetes`, `nginx`, `cicd`, `monitoring`
+- `tasks.py` — hands-on CLI tasks with command + hint + verify question; same topics as quiz minus `kubernetes`
+- `thinking.py` — SRE incident scenarios (slow server, service down, etc.); user submits a diagnosis plan, OpenAI evaluates it
+- `flashcards.py` — spaced repetition over `IT_WORDS` from `morning_brief.py`; intervals `[1, 3, 7, 14]` days by streak level
+- `study_tracker.py` — free-form study sessions; topics: `linux`, `networks`, `docker`, `git`, `ai`, `prompt`, `other` (different set from quiz/tasks)
 
 **Gamification:**
-- `xp.py` — XP points per action type, 7-level SRE progression (Стажёр → Senior SRE)
-- `achievements.py` — unlock badges for milestones (streaks, XP thresholds, first completions)
-- `stats.py` — aggregates all learning data into `/stats` and weekly report views
+- `xp.py` — XP per source type, 7-level SRE progression (Стажёр → Senior SRE)
+- `achievements.py` — badges for milestones (streaks, XP thresholds, first completions per module)
+- `stats.py` — aggregates all learning data into `/stats` and weekly report
 
-**Proactive features:**
-- `proactive.py` — generates morning check-in, midday nudge, evening reminder, pulse assessment, streak guard messages
-- `daily_cycle.py` — daily closing summary generation
-- `morning_brief.py` — morning brief builder + `IT_WORDS` vocabulary list used by flashcards
-- Proactive jobs are registered per `chat_id` via `app.job_queue` and restored on restart via `restore_proactive_jobs()`
-
-**AI persona:**
-- Default: `SYSTEM_PROMPT` in `brain.py` — practical productivity assistant, 3 options, JSON output
-- Gilfoyle mode: `GILFOYLE_PROMPT` — no motivation, facts only, same 3-option JSON structure
-- Both return structured JSON validated against `JSON_SCHEMA`; `brain.py` calls OpenAI with `response_format={"type": "json_object"}`
-
-**Topics covered** (shared across quiz/tasks/study tracker):
-`linux`, `networks`, `docker`, `git`, `bash`, `systemd`, `nginx`, `monitoring`, `cicd`, `kubernetes`
+**Recovery:**
+- `recovery.py` — `should_ask_failure_reason()`, `get_failure_reason_buttons()`, `build_recovery()`; triggered when result indicates failure
 
 ## Key conventions
 
-- All DB tables are created lazily via `init_*_db()` functions called in `main()`; use `ALTER TABLE` / `PRAGMA table_info` pattern (see `state.py:_column_exists`) when adding columns to existing tables
-- `chat_id` (Telegram integer) is the primary per-user key across all tables — there is no separate user table
-- All timestamps use `USER_TIMEZONE` via `ZoneInfo`; `today_str()` helpers are duplicated per module intentionally
-- Inline keyboard callbacks follow naming conventions: `act_N` (action choice), `res_N` (result/completion), `fail_N` (failure reason), `cmd_*` (menu commands), `plan_*` (plan flow), `quiz_*`, `task_*`, `flash_*`, `think_*`
-- `bot.py` contains all `async def *_command` and `handle_*` functions; business logic lives in the modules
+**Adding a new command:**
+1. Write `async def my_command(update, context)` in `bot.py`
+2. Add `app.add_handler(CommandHandler("mycommand", my_command))` in `main()`
+3. If it needs storage, create `init_my_db()` and call it in `main()` alongside the others
+4. Add a button to `build_main_menu_keyboard()` if it belongs in the menu
+
+**DB schema changes:** Use `PRAGMA table_info` + `ALTER TABLE` pattern — see `state.py:_column_exists()`. Never drop and recreate tables; data is not versioned.
+
+**Per-user key:** `chat_id` (Telegram integer) is the only user identifier across all tables — no separate users table.
+
+**Timezones:** All date/time uses `USER_TIMEZONE` via `ZoneInfo`. Each module defines its own `_today()` / `today_str()` helper locally.
+
+**Callback naming:** `act_N` — action choice, `res_N` — completion result, `fail_N` — failure reason, `cmd_*` — menu, `plan_*` — plan wizard, `quiz_*` / `task_*` / `flash_*` / `think_*` — learning module flows.
