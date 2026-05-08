@@ -9,16 +9,18 @@ from config import ASSISTANT_DB_PATH, USER_TIMEZONE
 TZ = ZoneInfo(USER_TIMEZONE)
 
 SKILL_TARGETS: Dict[str, Dict[str, Any]] = {
-    "linux":    {"label": "Linux      ", "target": 50, "weight": 0.30},
-    "networks": {"label": "Сети       ", "target": 30, "weight": 0.25},
-    "docker":   {"label": "Docker     ", "target": 30, "weight": 0.20},
-    "git":      {"label": "Git        ", "target": 20, "weight": 0.15},
-    "ai":       {"label": "AI         ", "target": 15, "weight": 0.05},
-    "prompt":   {"label": "Prompt Eng ", "target": 10, "weight": 0.05},
+    "linux":    {"label": "Linux",      "target": 120, "weight": 0.30},
+    "networks": {"label": "Сети",       "target": 80,  "weight": 0.25},
+    "docker":   {"label": "Docker",     "target": 80,  "weight": 0.20},
+    "git":      {"label": "Git",        "target": 50,  "weight": 0.15},
+    "ai":       {"label": "AI",         "target": 40,  "weight": 0.05},
+    "prompt":   {"label": "Prompt Eng", "target": 25,  "weight": 0.05},
 }
 
+BAR_W = 12
 
-def _bar(pct: float, width: int = 10) -> str:
+
+def _bar(pct: float, width: int = BAR_W) -> str:
     filled = min(width, round(pct / 100 * width))
     return "█" * filled + "░" * (width - filled)
 
@@ -97,48 +99,56 @@ def get_path_stats(chat_id: int) -> Dict[str, Any]:
     }
 
 
+def _fmt_eta(months_remaining: float | None) -> str:
+    if months_remaining is None:
+        return "нет данных о темпе"
+    m = round(months_remaining)
+    if m > 24:
+        return ">24 мес."
+    return f"~{m} мес."
+
+
 def format_path(chat_id: int, gilfoyle: bool = False) -> str:
+    from xp import format_xp_status
     s = get_path_stats(chat_id)
 
-    lines = []
+    lw = max(len(sk["label"]) for sk in s["skills"])  # label width
 
+    def row(label: str, pct: float, current: int = 0, target: int = 0) -> str:
+        b = _bar(pct)
+        pct_str = f"{round(pct):3}%"
+        count = f"{current}/{target}" if target else ""
+        return f"{label.ljust(lw)}  {b}  {pct_str}  {count}"
+
+    bar_lines = [row(sk["label"], sk["pct"], sk["current"], sk["target"]) for sk in s["skills"]]
+    bar_lines.append("─" * (lw + 2 + BAR_W + 8))
+    bar_lines.append(row("Итого", s["readiness_pct"]))
+
+    header = "📍 Путь к Junior SRE" if gilfoyle else "🗺 Путь к Junior SRE"
+    lines = [
+        header,
+        format_xp_status(chat_id),
+        "",
+        "```",
+        *bar_lines,
+        "```",
+    ]
+
+    eta = _fmt_eta(s["months_remaining"])
     if gilfoyle:
-        lines.append("📍 Путь к Junior SRE\n")
-        for sk in s["skills"]:
-            lines.append(f"{sk['label']} {sk['bar']}  {round(sk['pct']):3}%")
-        lines.append("")
-        lines.append(f"Готовность: {s['readiness_pct']}%")
-        if s["months_remaining"] is not None:
-            lines.append(f"При текущем темпе: {s['months_remaining']} мес.")
-        else:
-            lines.append("Темп: нет данных.")
+        lines.append(f"Темп: {eta}")
         if s["next_focus"]:
             nf = s["next_focus"]
-            lines.append(f"Следующее: {nf['label'].strip()} ({nf['remaining']} сессий).")
+            lines.append(f"Фокус: {nf['label']} ({nf['remaining']} сес.)")
     else:
-        lines.append("🗺 Путь к Junior SRE\n")
-        for sk in s["skills"]:
-            lines.append(f"{sk['label']} {sk['bar']}  {round(sk['pct']):3}%  ({sk['current']}/{sk['target']})")
-        lines.append("")
-        lines.append(f"📊 Общая готовность: {s['readiness_pct']}%")
-        if s["months_remaining"] is not None:
-            lines.append(f"⏱ При текущем темпе: ~{s['months_remaining']} месяцев")
-        else:
-            lines.append("⏱ Нет данных о темпе — начни первую сессию")
+        lines.append(f"⏱ При текущем темпе: {eta}")
         if s["next_focus"]:
             nf = s["next_focus"]
-            lines.append(
-                f"\n🎯 Следующий фокус: {nf['label'].strip()} "
-                f"(ещё {nf['remaining']} сессий до цели)"
-            )
+            lines.append(f"🎯 Следующий фокус: {nf['label']} — ещё {nf['remaining']} сессий")
 
     return "\n".join(lines)
 
 
 def format_path_short(chat_id: int) -> str:
     s = get_path_stats(chat_id)
-    if s["months_remaining"] is not None:
-        eta = f"~{s['months_remaining']} мес."
-    else:
-        eta = "нет данных"
-    return f"📍 Готовность к Junior SRE: {s['readiness_pct']}% | {eta}"
+    return f"📍 Готовность к Junior SRE: {s['readiness_pct']}% | {_fmt_eta(s['months_remaining'])}"

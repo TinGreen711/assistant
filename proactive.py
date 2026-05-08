@@ -10,6 +10,7 @@ from domains import assess_domain_alignment, DOMAINS
 from study_tracker import get_streak, studied_today
 from morning_brief import build_morning_brief
 from state import get_gilfoyle_mode
+from achievements import format_daily_xp
 
 
 TZ = ZoneInfo(USER_TIMEZONE)
@@ -76,16 +77,19 @@ def build_checkin(chat_id: int) -> Dict[str, Any]:
 
 def build_evening_reminder(chat_id: int) -> Dict[str, Any]:
     state = get_session_state(chat_id) or {}
+    daily_xp_line = format_daily_xp(chat_id)
 
     if state.get("current_day") == _today_str() and state.get("daily_plan_done") and not state.get("daily_closed"):
         text = (
             "🌙 Напоминание про закрытие дня\n"
             f"Фокус дня: {state.get('daily_focus_text', '')}\n"
+            f"{daily_xp_line}\n"
             "Полезно закрыть день и зафиксировать вывод."
         )
     else:
         text = (
             "🌙 Напоминание на вечер\n"
+            f"{daily_xp_line}\n"
             "Если день уже закончен, можно сделать closing и зафиксировать вывод."
         )
 

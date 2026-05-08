@@ -174,6 +174,53 @@ def _pick_word(total_sessions: int) -> Dict[str, str]:
     return IT_WORDS[total_sessions % len(IT_WORDS)]
 
 
+def _get_weak_topics(chat_id: int, limit: int = 1) -> list:
+    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+        quiz_rows = conn.execute(
+            """SELECT topic, SUM(correct), SUM(total)
+               FROM quiz_results WHERE chat_id = ?
+               GROUP BY topic HAVING SUM(total) >= 3""",
+            (chat_id,),
+        ).fetchall()
+        task_rows = conn.execute(
+            """SELECT topic, SUM(1 - completed), COUNT(*)
+               FROM task_completions WHERE chat_id = ?
+               GROUP BY topic HAVING COUNT(*) >= 2""",
+            (chat_id,),
+        ).fetchall()
+
+    quiz_scores = {t: (c, total) for t, c, total in quiz_rows}
+    task_scores = {t: (f, total) for t, f, total in task_rows}
+
+    all_topics = set(quiz_scores) | set(task_scores)
+    if not all_topics:
+        return []
+
+    def weakness(topic: str) -> float:
+        parts = []
+        if topic in quiz_scores:
+            c, t = quiz_scores[topic]
+            parts.append(1 - c / t)
+        if topic in task_scores:
+            f, t = task_scores[topic]
+            parts.append(f / t)
+        return sum(parts) / len(parts)
+
+    ranked = sorted(all_topics, key=weakness, reverse=True)[:limit]
+
+    result = []
+    for topic in ranked:
+        if topic in quiz_scores:
+            c, t = quiz_scores[topic]
+            hint = f"{round(100 * c / t)}% в квизах"
+        else:
+            f, t = task_scores[topic]
+            hint = f"{round(100 * f / t)}% задач не выполнено"
+        result.append({"topic": topic, "label": TOPICS.get(topic, topic), "hint": hint})
+
+    return result
+
+
 def _format_progress_fact(chat_id: int) -> str:
     stats = get_stats(chat_id)
     topics = stats["topics"]
@@ -213,12 +260,17 @@ def build_morning_brief(chat_id: int, gilfoyle: bool = False) -> str:
     word = _pick_word(total)
     progress = _format_progress_fact(chat_id)
 
+    weak = _get_weak_topics(chat_id)
+
     if gilfoyle:
         lines = []
         when = "Сегодня" if days_ago == 0 else ("Вчера" if days_ago == 1 else f"{days_ago} дн. назад")
         lines.append(f"Последнее: {label} ({when}).")
         lines.append(f"Сегодня: {task['task']}")
         lines.append(f"{word['word']} — {word['translation']}. \"{word['example']}\"")
+        if weak:
+            w = weak[0]
+            lines.append(f"Слабо: {w['label']} — {w['hint']}. Иди учи.")
         return "\n".join(lines)
 
     lines = []
@@ -240,5 +292,9 @@ def build_morning_brief(chat_id: int, gilfoyle: bool = False) -> str:
 
     if progress:
         lines.append(progress)
+
+    if weak:
+        w = weak[0]
+        lines.append(f"⚠️ Слабое место: {w['label']} — {w['hint']}. Стоит повторить.")
 
     return "\n\n".join(lines)

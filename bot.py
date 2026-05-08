@@ -92,10 +92,51 @@ from study_tracker import (
     TOPICS,
 )
 from skills_path import format_path, format_path_short
+from quiz import (
+    init_quiz_db,
+    get_questions,
+    format_question,
+    format_answer_result,
+    format_score,
+    log_quiz_result,
+    QUIZ_TOPICS,
+)
+from tasks import (
+    init_tasks_db,
+    get_task,
+    format_task,
+    format_task_with_hint,
+    log_task_completion,
+    TASK_TOPICS,
+)
+from thinking import (
+    init_thinking_db,
+    get_scenario,
+    format_symptom,
+    format_full_breakdown,
+    evaluate_user_plan,
+    log_thinking_session,
+)
+from flashcards import (
+    init_flash_db,
+    get_session_cards,
+    update_card,
+    format_card_front,
+    format_card_back,
+    format_session_result,
+)
+from stats import build_stats_text, build_weekly_report_text
+from xp import init_xp_db, add_xp, format_levelup
+from achievements import init_achievements_db, check_and_unlock, format_achievement, format_daily_xp
 
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 TZ = ZoneInfo(USER_TIMEZONE)
+
+
+async def _send_achievements(target, keys: list[str]) -> None:
+    for key in keys:
+        await target.reply_text(f"🏅 Ачивка!\n{format_achievement(key)}", parse_mode="Markdown")
 
 
 def log(*args: object) -> None:
@@ -135,19 +176,24 @@ def build_main_menu_keyboard(gilfoyle: bool = False) -> InlineKeyboardMarkup:
     gilfoyle_label = "👤 Обычный режим" if gilfoyle else "🤖 Режим Гилфойла"
     gilfoyle_cmd = "cmd_gilfoyle_off" if gilfoyle else "cmd_gilfoyle_on"
     rows = [
-        [InlineKeyboardButton(text="🗓 План дня", callback_data="cmd_plan")],
-        [InlineKeyboardButton(text="☀️ Check-in", callback_data="cmd_checkin")],
-        [InlineKeyboardButton(text="📡 Pulse", callback_data="cmd_pulse")],
-        [InlineKeyboardButton(text="🌙 Закрыть день", callback_data="cmd_close")],
+        [InlineKeyboardButton(text="🗓 План дня", callback_data="cmd_plan"),
+         InlineKeyboardButton(text="☀️ Check-in", callback_data="cmd_checkin")],
+        [InlineKeyboardButton(text="📡 Pulse", callback_data="cmd_pulse"),
+         InlineKeyboardButton(text="🌙 Закрыть день", callback_data="cmd_close")],
         [InlineKeyboardButton(text="🎯 Цель недели", callback_data="cmd_weekgoal"),
          InlineKeyboardButton(text="🧭 Вектор месяца", callback_data="cmd_monthfocus")],
-        [InlineKeyboardButton(text="📚 Обучение /study", callback_data="cmd_study"),
-         InlineKeyboardButton(text="🗺 Путь /path", callback_data="cmd_path")],
-        [InlineKeyboardButton(text="🧠 Strategy", callback_data="cmd_strategy"),
-         InlineKeyboardButton(text="📊 Weekly", callback_data="cmd_weekly")],
+        [InlineKeyboardButton(text="📚 /study", callback_data="cmd_study"),
+         InlineKeyboardButton(text="🗺 /path", callback_data="cmd_path"),
+         InlineKeyboardButton(text="📈 /stats", callback_data="cmd_stats")],
+        [InlineKeyboardButton(text="🧩 /quiz", callback_data="cmd_quiz"),
+         InlineKeyboardButton(text="🔧 /task", callback_data="cmd_task"),
+         InlineKeyboardButton(text="🃏 /flash", callback_data="cmd_flash")],
+        [InlineKeyboardButton(text="🧠 /think", callback_data="cmd_think"),
+         InlineKeyboardButton(text="📊 Weekly", callback_data="cmd_weekly"),
+         InlineKeyboardButton(text="🧠 Strategy", callback_data="cmd_strategy")],
         [InlineKeyboardButton(text="🔔 Proactive on", callback_data="cmd_proactive_on"),
-         InlineKeyboardButton(text="🔕 Proactive off", callback_data="cmd_proactive_off")],
-        [InlineKeyboardButton(text=gilfoyle_label, callback_data=gilfoyle_cmd)],
+         InlineKeyboardButton(text="🔕 off", callback_data="cmd_proactive_off"),
+         InlineKeyboardButton(text=gilfoyle_label, callback_data=gilfoyle_cmd)],
         [InlineKeyboardButton(text="♻️ Сбросить сессию", callback_data="cmd_reset")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -177,6 +223,38 @@ def build_study_topic_keyboard() -> InlineKeyboardMarkup:
         for key, label in TOPICS.items()
     ]
     return InlineKeyboardMarkup(rows)
+
+
+def build_quiz_topic_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=f"quiz_topic_{key}")]
+        for key, label in QUIZ_TOPICS.items()
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def build_quiz_answer_keyboard(options: list[str]) -> InlineKeyboardMarkup:
+    letters = ["A", "B", "C", "D"]
+    rows = [
+        [InlineKeyboardButton(text=letters[i], callback_data=f"quiz_ans_{i}")]
+        for i in range(len(options))
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def build_thinking_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(text="✍️ Написать план", callback_data="think_write"),
+        InlineKeyboardButton(text="👁 Показать подход", callback_data="think_show"),
+    ]])
+
+
+def build_task_keyboard(hint_shown: bool = False) -> InlineKeyboardMarkup:
+    row = [InlineKeyboardButton(text="✅ Выполнил", callback_data="task_done")]
+    if not hint_shown:
+        row.append(InlineKeyboardButton(text="💡 Подсказка", callback_data="task_hint"))
+    row.append(InlineKeyboardButton(text="❌ Не получилось", callback_data="task_fail"))
+    return InlineKeyboardMarkup([row])
 
 
 def build_domain_keyboard(prefix: str) -> InlineKeyboardMarkup:
@@ -232,7 +310,7 @@ def remove_jobs_for_chat(job_queue: JobQueue | None, chat_id: int) -> None:
     if not job_queue:
         return
 
-    for name in [f"morning_{chat_id}", f"evening_{chat_id}", f"midday_{chat_id}", f"streak_{chat_id}"]:
+    for name in [f"morning_{chat_id}", f"evening_{chat_id}", f"midday_{chat_id}", f"streak_{chat_id}", f"weekly_{chat_id}"]:
         jobs = job_queue.get_jobs_by_name(name)
         for job in jobs:
             job.schedule_removal()
@@ -282,6 +360,13 @@ def schedule_jobs_for_chat(job_queue: JobQueue | None, chat_id: int) -> None:
         time=time(hour=18, minute=20, tzinfo=TZ),
         chat_id=chat_id,
         name=f"streak_{chat_id}",
+    )
+    job_queue.run_daily(
+        weekly_report_job,
+        time=time(hour=20, minute=0, tzinfo=TZ),
+        days=(6,),
+        chat_id=chat_id,
+        name=f"weekly_{chat_id}",
     )
 
 
@@ -460,6 +545,7 @@ async def run_daily_closing(message_target, chat_id: int) -> None:
     save_daily_closing(closing_text)
     mark_daily_closed(chat_id, closed=True)
     save_memory_note(chat_id=chat_id, note_type="closing", content=closing_text)
+    add_xp(chat_id, "day_close")
 
     append_daily_entry(
         f"### Daily focus status\n"
@@ -672,6 +758,19 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await run_weekly_summary(update.message, update.effective_chat.id)
 
 
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    text = build_stats_text(update.effective_chat.id)
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def weekly_report_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = context.job.chat_id
+    text = build_weekly_report_text(chat_id)
+    await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
+
+
 async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
@@ -753,7 +852,7 @@ async def path_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     gf = get_gilfoyle_mode(update.effective_chat.id)
     text = format_path(update.effective_chat.id, gilfoyle=gf)
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 async def gilfoyle_on_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -782,6 +881,142 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await send_main_menu(update.message, update.effective_chat.id)
 
 
+async def think_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    scenario = get_scenario()
+    context.user_data["thinking_state"] = scenario
+    await update.message.reply_text(
+        format_symptom(scenario),
+        reply_markup=build_thinking_keyboard(),
+    )
+
+
+async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    task = get_task(update.effective_chat.id)
+    context.user_data["task_state"] = task
+    await update.message.reply_text(
+        format_task(task),
+        reply_markup=build_task_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+async def flash_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    await _start_flash_session(update.message, context)
+
+
+async def _start_flash_session(message_target, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cards = get_session_cards(message_target.chat.id)
+    if not cards:
+        await message_target.reply_text("Нет карточек для повторения. Загляни завтра!")
+        return
+    context.user_data["flash_state"] = {"cards": cards, "idx": 0, "known": 0}
+    await _send_flash_card(message_target, context)
+
+
+async def _send_flash_card(message_target, context: ContextTypes.DEFAULT_TYPE) -> None:
+    state = context.user_data.get("flash_state")
+    if not state:
+        await message_target.reply_text("Сессия не найдена. Запусти /flash заново.")
+        return
+
+    idx = state["idx"]
+    cards = state["cards"]
+    total = len(cards)
+
+    if idx >= total:
+        known = state["known"]
+        context.user_data.pop("flash_state", None)
+        xp_result = add_xp(message_target.chat.id, "flash_session")
+        result_text = format_session_result(known, total) + f"\n+{xp_result['amount']} XP"
+        await message_target.reply_text(result_text)
+        if xp_result["leveled_up"]:
+            await message_target.reply_text(format_levelup(xp_result["info"]), parse_mode="Markdown")
+        achivs = check_and_unlock(message_target.chat.id, flash_session_done=True)
+        await _send_achievements(message_target, achivs)
+        await send_main_menu(message_target, message_target.chat.id)
+        return
+
+    card = cards[idx]
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Знаю", callback_data="flash_know"),
+        InlineKeyboardButton("❌ Не знаю", callback_data="flash_nope"),
+    ]])
+    await message_target.reply_text(
+        format_card_front(card, idx + 1, total),
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+
+
+async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    await update.message.reply_text(
+        "Выбери тему квиза:",
+        reply_markup=build_quiz_topic_keyboard(),
+    )
+
+
+async def send_quiz_question(message_target, context: ContextTypes.DEFAULT_TYPE) -> None:
+    state = context.user_data.get("quiz_state")
+    if not state:
+        await message_target.reply_text("Квиз не найден. Запусти /quiz заново.")
+        return
+
+    idx = state["current_idx"]
+    questions = state["questions"]
+    total = len(questions)
+
+    if idx >= total:
+        correct = state["correct"]
+        topic = state["topic"]
+        topic_label = QUIZ_TOPICS.get(topic, topic)
+        score_text = format_score(correct, total, topic_label)
+
+        log_quiz_result(message_target.chat.id, topic, correct, total)
+        log_session(message_target.chat.id, topic if topic in TOPICS else "other")
+        streak = get_streak(message_target.chat.id)
+        pct = int(correct / total * 100) if total else 0
+        save_memory_note(
+            message_target.chat.id,
+            "quiz",
+            f"Квиз {topic_label}: {correct}/{total} ({pct}%)",
+        )
+        xp_result = add_xp(message_target.chat.id, "quiz", amount=correct * 10 + 20)
+        is_chain = state.get("chain", False)
+        context.user_data.pop("quiz_state", None)
+
+        await message_target.reply_text(
+            f"{score_text}\n\n🔥 Стрик: {streak} дн.\n+{xp_result['amount']} XP"
+        )
+        if xp_result["leveled_up"]:
+            await message_target.reply_text(format_levelup(xp_result["info"]), parse_mode="Markdown")
+        achivs = check_and_unlock(message_target.chat.id, quiz_correct=correct, quiz_total=total)
+        await _send_achievements(message_target, achivs)
+        if is_chain and topic in TASK_TOPICS:
+            await message_target.reply_text(
+                f"Теперь практика — задача по теме {topic_label}?",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔧 Задача", callback_data=f"chain_task_{topic}"),
+                    InlineKeyboardButton("→ Готово", callback_data="chain_skip"),
+                ]]),
+            )
+        else:
+            await send_main_menu(message_target, message_target.chat.id)
+        return
+
+    question = questions[idx]
+    text = format_question(question, idx, total)
+    keyboard = build_quiz_answer_keyboard(question["options"])
+    await message_target.reply_text(text, reply_markup=keyboard)
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
         return
@@ -795,6 +1030,31 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if state:
         active_stage = str(state.get("active_stage", "")).strip()
+
+        if active_stage == "await_thinking_plan":
+            scenario = context.user_data.get("thinking_state")
+            if not scenario:
+                update_session_state(chat_id, active_stage="")
+                await update.message.reply_text("Сценарий устарел. Запусти /think заново.")
+                return
+
+            await update.message.chat.send_action(ChatAction.TYPING)
+            gf = get_gilfoyle_mode(chat_id)
+            evaluation = evaluate_user_plan(user_text, scenario, gilfoyle=gf)
+
+            update_session_state(chat_id, active_stage="")
+            log_thinking_session(
+                chat_id=chat_id,
+                scenario_id=scenario["id"],
+                wrote_plan=True,
+            )
+
+            await update.message.reply_text(f"Разбор твоего плана:\n\n{evaluation}")
+            await update.message.reply_text(
+                f"Эталонный подход:\n\n{format_full_breakdown(scenario)}"
+            )
+            context.user_data.pop("thinking_state", None)
+            return
 
         if active_stage == "await_weekly_goal_text":
             draft = get_goal_draft(context)
@@ -1391,6 +1651,11 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await run_weekly_summary(query.message, query.message.chat.id)
         return
 
+    if data == "cmd_stats":
+        text = build_stats_text(query.message.chat.id)
+        await query.message.reply_text(text, parse_mode="Markdown")
+        return
+
     if data == "cmd_reset":
         context.user_data.clear()
         clear_session_state(query.message.chat.id)
@@ -1434,7 +1699,206 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if data == "cmd_path":
         gf = get_gilfoyle_mode(query.message.chat.id)
         text = format_path(query.message.chat.id, gilfoyle=gf)
-        await query.message.reply_text(text)
+        await query.message.reply_text(text, parse_mode="Markdown")
+        return
+
+    if data == "cmd_think":
+        scenario = get_scenario()
+        context.user_data["thinking_state"] = scenario
+        await query.message.reply_text(
+            format_symptom(scenario),
+            reply_markup=build_thinking_keyboard(),
+        )
+        return
+
+    if data == "think_write":
+        scenario = context.user_data.get("thinking_state")
+        if not scenario:
+            await query.edit_message_text("Сценарий устарел. Запусти /think заново.")
+            return
+        update_session_state(query.message.chat.id, active_stage="await_thinking_plan")
+        await query.edit_message_text(
+            format_symptom(scenario) + "\n\n— Пиши, жду твой план:"
+        )
+        return
+
+    if data == "think_show":
+        scenario = context.user_data.get("thinking_state")
+        if not scenario:
+            await query.edit_message_text("Сценарий устарел. Запусти /think заново.")
+            return
+        log_thinking_session(
+            chat_id=query.message.chat.id,
+            scenario_id=scenario["id"],
+            wrote_plan=False,
+        )
+        context.user_data.pop("thinking_state", None)
+        await query.edit_message_text(
+            f"Симптом:\n{scenario['symptom']}\n\n{format_full_breakdown(scenario)}"
+        )
+        return
+
+    if data == "cmd_task":
+        task = get_task(query.message.chat.id)
+        context.user_data["task_state"] = task
+        await query.message.reply_text(
+            format_task(task),
+            reply_markup=build_task_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+
+    if data.startswith("chain_quiz_"):
+        topic = data.replace("chain_quiz_", "", 1)
+        if topic not in QUIZ_TOPICS:
+            await send_main_menu(query.message, query.message.chat.id)
+            return
+        questions = get_questions(topic)
+        context.user_data["quiz_state"] = {
+            "topic": topic,
+            "questions": questions,
+            "current_idx": 0,
+            "correct": 0,
+            "chain": True,
+        }
+        await query.edit_message_text(f"Тема: {QUIZ_TOPICS[topic]}. Поехали!")
+        await send_quiz_question(query.message, context)
+        return
+
+    if data.startswith("chain_task_"):
+        topic = data.replace("chain_task_", "", 1)
+        task = get_task(query.message.chat.id, preferred_topic=topic)
+        context.user_data["task_state"] = task
+        await query.edit_message_text(
+            format_task(task),
+            reply_markup=build_task_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+
+    if data == "chain_skip":
+        await query.edit_message_text("Окей, до следующего раза!")
+        await send_main_menu(query.message, query.message.chat.id)
+        return
+
+    if data == "task_hint":
+        task = context.user_data.get("task_state")
+        if not task:
+            await query.edit_message_text("Задача устарела. Запусти /task заново.")
+            return
+        await query.edit_message_text(
+            format_task_with_hint(task),
+            reply_markup=build_task_keyboard(hint_shown=True),
+            parse_mode="Markdown",
+        )
+        return
+
+    if data in ("task_done", "task_fail"):
+        task = context.user_data.get("task_state")
+        if not task:
+            await query.edit_message_text("Задача устарела. Запусти /task заново.")
+            return
+        completed = data == "task_done"
+        log_task_completion(
+            chat_id=query.message.chat.id,
+            topic=task["topic"],
+            title=task["title"],
+            completed=completed,
+        )
+        log_session(query.message.chat.id, task["topic"] if task["topic"] in TOPICS else "other")
+        streak = get_streak(query.message.chat.id)
+        save_memory_note(
+            query.message.chat.id,
+            "task",
+            f"Задача {TOPICS.get(task['topic'], task['topic'])}: {'выполнена' if completed else 'не получилось'} — {task['title']}",
+        )
+        xp_result = add_xp(query.message.chat.id, "task_done" if completed else "task_fail")
+        context.user_data.pop("task_state", None)
+
+        if completed:
+            result_text = f"✅ Отлично! Задача выполнена.\n{task['title']}\n\n🔥 Стрик: {streak} дн.\n+{xp_result['amount']} XP"
+        else:
+            result_text = (
+                f"❌ Не получилось — бывает.\n\n"
+                f"Подсказка: {task['hint']}\n\n"
+                f"Попробуй ещё раз позже или возьми новую задачу /task"
+            )
+        await query.edit_message_text(result_text)
+        if xp_result["leveled_up"]:
+            await query.message.reply_text(format_levelup(xp_result["info"]), parse_mode="Markdown")
+        achivs = check_and_unlock(query.message.chat.id, task_completed=completed)
+        await _send_achievements(query.message, achivs)
+        return
+
+    if data == "cmd_flash":
+        await _start_flash_session(query.message, context)
+        return
+
+    if data in ("flash_know", "flash_nope"):
+        state = context.user_data.get("flash_state")
+        if not state:
+            await query.edit_message_text("Сессия устарела. Запусти /flash заново.")
+            return
+        knew = data == "flash_know"
+        card = state["cards"][state["idx"]]
+        update_card(query.message.chat.id, card["word"], knew)
+        if knew:
+            state["known"] += 1
+            add_xp(query.message.chat.id, "flash_known")
+        state["idx"] += 1
+        await query.edit_message_text(
+            format_card_back(card, knew),
+            parse_mode="Markdown",
+        )
+        await _send_flash_card(query.message, context)
+        return
+
+    if data == "cmd_quiz":
+        await query.message.reply_text(
+            "Выбери тему квиза:",
+            reply_markup=build_quiz_topic_keyboard(),
+        )
+        return
+
+    if data.startswith("quiz_topic_"):
+        topic = data.replace("quiz_topic_", "", 1)
+        if topic not in QUIZ_TOPICS:
+            await query.message.reply_text("Неизвестная тема.")
+            return
+        questions = get_questions(topic)
+        context.user_data["quiz_state"] = {
+            "topic": topic,
+            "questions": questions,
+            "current_idx": 0,
+            "correct": 0,
+        }
+        await query.edit_message_text(f"Тема: {QUIZ_TOPICS[topic]}. Начинаем!")
+        await send_quiz_question(query.message, context)
+        return
+
+    if data.startswith("quiz_ans_"):
+        state = context.user_data.get("quiz_state")
+        if not state:
+            await query.edit_message_text("Квиз устарел. Запусти /quiz заново.")
+            return
+        try:
+            chosen_idx = int(data.replace("quiz_ans_", "", 1))
+        except ValueError:
+            await query.edit_message_text("Ошибка ответа.")
+            return
+
+        idx = state["current_idx"]
+        questions = state["questions"]
+        question = questions[idx]
+
+        if chosen_idx == question["correct"]:
+            state["correct"] += 1
+
+        result_text = format_answer_result(question, chosen_idx)
+        await query.edit_message_text(result_text)
+
+        state["current_idx"] += 1
+        await send_quiz_question(query.message, context)
         return
 
     if data == "cmd_gilfoyle_on":
@@ -1476,7 +1940,28 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         log_session(chat_id, topic)
         label = TOPICS.get(topic, topic)
         streak = get_streak(chat_id)
-        await query.edit_message_text(f"✅ {label} — записано\n🔥 Стрик: {streak} дн.")
+        save_memory_note(chat_id, "study", f"Изучал: {label}")
+        xp_result = add_xp(chat_id, "study")
+        await query.edit_message_text(f"✅ {label} — записано\n🔥 Стрик: {streak} дн.\n+{xp_result['amount']} XP")
+        if xp_result["leveled_up"]:
+            await query.message.reply_text(format_levelup(xp_result["info"]), parse_mode="Markdown")
+        achivs = check_and_unlock(chat_id)
+        await _send_achievements(query.message, achivs)
+        has_quiz = topic in QUIZ_TOPICS
+        has_task = topic in TASK_TOPICS
+        if has_quiz or has_task:
+            buttons = []
+            if has_quiz:
+                buttons.append(InlineKeyboardButton("🧩 Квиз", callback_data=f"chain_quiz_{topic}"))
+            if has_task:
+                buttons.append(InlineKeyboardButton("🔧 Задача", callback_data=f"chain_task_{topic}"))
+            buttons.append(InlineKeyboardButton("→ Готово", callback_data="chain_skip"))
+            await query.message.reply_text(
+                f"Закрепим {label}?",
+                reply_markup=InlineKeyboardMarkup([buttons]),
+            )
+        else:
+            await send_main_menu(query.message, chat_id)
         return
 
     if data.startswith("plan_"):
@@ -1520,6 +2005,12 @@ def main() -> None:
     init_outcomes_db()
     init_study_db()
     init_session_memory_db()
+    init_quiz_db()
+    init_tasks_db()
+    init_thinking_db()
+    init_flash_db()
+    init_xp_db()
+    init_achievements_db()
 
     persistence = PicklePersistence(filepath=str(Path(ASSISTANT_DB_PATH).parent / "bot_persistence.pkl"))
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).persistence(persistence).build()
@@ -1541,6 +2032,11 @@ def main() -> None:
     app.add_handler(CommandHandler("gilfoyle_on", gilfoyle_on_command))
     app.add_handler(CommandHandler("gilfoyle_off", gilfoyle_off_command))
     app.add_handler(CommandHandler("menu", menu_command))
+    app.add_handler(CommandHandler("quiz", quiz_command))
+    app.add_handler(CommandHandler("task", task_command))
+    app.add_handler(CommandHandler("think", think_command))
+    app.add_handler(CommandHandler("flash", flash_command))
+    app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(CallbackQueryHandler(handle_button))
