@@ -1,6 +1,9 @@
 import json
+import logging
 import re
 from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from openai import OpenAI
 
@@ -162,8 +165,6 @@ def _extract_numbered_options(raw: str) -> Optional[Dict]:
 
 
 def _fallback_by_mode(mode: str, user_text: str) -> Dict:
-    t = user_text.lower()
-
     if mode == "low_time":
         return {
             "mode": "low_time",
@@ -387,13 +388,13 @@ def generate_options(user_text: str, extra_hints: str = "", gilfoyle_mode: bool 
         if data:
             return _postprocess(data, mode, user_text)
     except Exception:
-        pass
+        logger.exception("generate_options: structured response failed")
 
     try:
         data = _try_plain_response(prompt, gilfoyle_mode=gilfoyle_mode)
         if data:
             return _postprocess(data, mode, user_text)
     except Exception:
-        pass
+        logger.exception("generate_options: plain response failed")
 
     return _fallback_by_mode(mode, user_text)

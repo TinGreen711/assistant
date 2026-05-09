@@ -1,6 +1,10 @@
+import logging
+
 from openai import OpenAI
 
 from config import OPENAI_API_KEY, OPENAI_CHAT_MODEL
+
+logger = logging.getLogger(__name__)
 from memory import (
     read_profile,
     read_recent_daily_notes,
@@ -212,6 +216,7 @@ Decision notes за последние {days} дней:
         if not text:
             text = _fallback_weekly_summary(daily_notes, decision_notes, long_horizon_text, strategy_text)
     except Exception:
+        logger.exception("generate_weekly_summary: OpenAI call failed")
         text = _fallback_weekly_summary(daily_notes, decision_notes, long_horizon_text, strategy_text)
 
     path = save_weekly_summary(text)

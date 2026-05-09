@@ -1,6 +1,10 @@
+import logging
+
 from openai import OpenAI
 
 from config import OPENAI_API_KEY, OPENAI_CHAT_MODEL
+
+logger = logging.getLogger(__name__)
 
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -122,6 +126,7 @@ def generate_daily_closing(
                 long_horizon_text,
             )
     except Exception:
+        logger.exception("generate_daily_closing: OpenAI call failed")
         text = _fallback_daily_closing(
             focus_text,
             energy_label,

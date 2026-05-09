@@ -23,7 +23,7 @@ def init_session_memory_db() -> None:
 
 
 def save_memory_note(chat_id: int, note_type: str, content: str) -> None:
-    """Сохраняет заметку о сессии. type: 'lesson', 'closing', 'plan'."""
+    """Сохраняет заметку о сессии. type: 'lesson', 'closing', 'plan', 'study'."""
     today = datetime.now(TZ).strftime("%Y-%m-%d")
     content = content.strip()
     if not content:

@@ -1,11 +1,13 @@
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List
+from zoneinfo import ZoneInfo
 
-from config import OBSIDIAN_ROOT
+from config import OBSIDIAN_ROOT, USER_TIMEZONE
 
 
 ROOT = Path(OBSIDIAN_ROOT)
+TZ = ZoneInfo(USER_TIMEZONE)
 
 
 def ensure_dirs() -> None:
@@ -17,21 +19,21 @@ def ensure_dirs() -> None:
 
 
 def _today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    return datetime.now(TZ).strftime("%Y-%m-%d")
 
 
 def _now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M")
+    return datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
 
 
 def _week_key() -> str:
-    now = datetime.now()
+    now = datetime.now(TZ)
     iso_year, iso_week, _ = now.isocalendar()
     return f"{iso_year}-W{iso_week:02d}"
 
 
 def _month_key() -> str:
-    return datetime.now().strftime("%Y-%m")
+    return datetime.now(TZ).strftime("%Y-%m")
 
 
 def _append_block(path: Path, block: str) -> None:
@@ -281,7 +283,7 @@ def read_recent_decision_notes(days: int = 7, max_chars_per_file: int = 4000) ->
 
 def save_weekly_summary(summary_text: str) -> Path:
     ensure_dirs()
-    now = datetime.now()
+    now = datetime.now(TZ)
     iso_year, iso_week, _ = now.isocalendar()
     path = ROOT / "summaries" / "weekly" / f"{iso_year}-W{iso_week:02d}.md"
 

@@ -4,8 +4,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional
 
+import logging
+
 from openai import OpenAI
-from config import ASSISTANT_DB_PATH, USER_TIMEZONE, OPENAI_API_KEY
+from config import ASSISTANT_DB_PATH, USER_TIMEZONE, OPENAI_API_KEY, OPENAI_CHAT_MODEL
+
+logger = logging.getLogger(__name__)
 
 TZ = ZoneInfo(USER_TIMEZONE)
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -411,10 +415,14 @@ def evaluate_user_plan(
 
 Будь конкретен. Без общих слов. Максимум 150 слов."""
 
-    response = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=300,
-        temperature=0.5,
-    )
-    return (response.choices[0].message.content or "").strip()
+    try:
+        response = client.responses.create(
+            model=OPENAI_CHAT_MODEL,
+            input=prompt,
+            max_output_tokens=300,
+            store=False,
+        )
+        return response.output_text.strip()
+    except Exception:
+        logger.exception("evaluate_user_plan: OpenAI call failed")
+        return "Не удалось получить оценку. Попробуй ещё раз."
