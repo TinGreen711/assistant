@@ -119,6 +119,19 @@ def get_stats(chat_id: int) -> Dict[str, Any]:
     }
 
 
+def get_days_idle(chat_id: int) -> int:
+    """Сколько дней подряд без учебной сессии (0 если сегодня была)."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT MAX(date) FROM study_sessions WHERE chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+    if not row or not row[0]:
+        return 999
+    last = date.fromisoformat(row[0])
+    return (datetime.now(TZ).date() - last).days
+
+
 def format_study_stats(chat_id: int) -> str:
     stats = get_stats(chat_id)
     streak = stats["streak"]

@@ -131,6 +131,10 @@ from stats import build_stats_text, build_weekly_report_text
 from xp import init_xp_db, add_xp, format_levelup
 from achievements import init_achievements_db, check_and_unlock, format_achievement, format_daily_xp
 from capture import save_capture, CAPTURE_TYPES
+from quests import (
+    init_quests_db, get_active_quest, start_quest, get_next_quest_step,
+    format_quest_status, build_quest_keyboard, QUESTS_BY_ID,
+)
 
 
 TZ = ZoneInfo(USER_TIMEZONE)
@@ -228,7 +232,8 @@ def build_full_menu_keyboard(gilfoyle: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🧠 /think", callback_data="cmd_think"),
          InlineKeyboardButton(text="📊 Weekly", callback_data="cmd_weekly"),
          InlineKeyboardButton(text="🧠 Strategy", callback_data="cmd_strategy")],
-        [InlineKeyboardButton(text="📝 Записать мысль", callback_data="cmd_capture")],
+        [InlineKeyboardButton(text="🗺 /quest", callback_data="cmd_quest"),
+         InlineKeyboardButton(text="📝 Записать мысль", callback_data="cmd_capture")],
         [InlineKeyboardButton(text="🔔 Proactive on", callback_data="cmd_proactive_on"),
          InlineKeyboardButton(text="🔕 off", callback_data="cmd_proactive_off"),
          InlineKeyboardButton(text=gilfoyle_label, callback_data=gilfoyle_cmd)],
@@ -945,6 +950,21 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message:
         return
     await send_main_menu(update.message, update.effective_chat.id)
+
+
+async def quest_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    chat_id = update.message.chat.id
+    active = get_active_quest(chat_id)
+    status_text = format_quest_status(chat_id)
+    if active:
+        await update.message.reply_text(status_text)
+    else:
+        await update.message.reply_text(
+            status_text + "\n\nВыбери квест:",
+            reply_markup=build_quest_keyboard(),
+        )
 
 
 async def capture_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1783,6 +1803,38 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await run_daily_closing(query.message, query.message.chat.id)
         return
 
+    if data == "cmd_quest":
+        await quest_command.__wrapped__(query, context) if hasattr(quest_command, "__wrapped__") else None
+        chat_id = query.message.chat.id
+        active = get_active_quest(chat_id)
+        status_text = format_quest_status(chat_id)
+        if active:
+            await query.message.reply_text(status_text)
+        else:
+            await query.message.reply_text(status_text + "\n\nВыбери квест:", reply_markup=build_quest_keyboard())
+        return
+
+    if data.startswith("quest_start_"):
+        quest_id = data.replace("quest_start_", "", 1)
+        chat_id = query.message.chat.id
+        if quest_id not in QUESTS_BY_ID:
+            await query.answer("Квест не найден.")
+            return
+        ok = start_quest(chat_id, quest_id)
+        if ok:
+            next_step = get_next_quest_step(chat_id)
+            q = QUESTS_BY_ID[quest_id]
+            text = (
+                f"🗺 Квест начат: {q['label']}\n"
+                f"{q['description']}\n\n"
+                f"Шаг 1/{len(q['steps'])}: {next_step['label']}\n"
+                f"Действие: /{next_step['action']}"
+            )
+        else:
+            text = "Квест уже активен или уже завершён."
+        await query.message.reply_text(text)
+        return
+
     if data == "cmd_weekgoal":
         await start_weekly_goal_flow(query.message, context)
         return
@@ -2166,6 +2218,7 @@ def main() -> None:
     init_xp_db()
     init_achievements_db()
     init_readiness_history_db()
+    init_quests_db()
 
     persistence = PicklePersistence(filepath=str(Path(ASSISTANT_DB_PATH).parent / "bot_persistence.pkl"))
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).persistence(persistence).build()
@@ -2188,6 +2241,7 @@ def main() -> None:
     app.add_handler(CommandHandler("gilfoyle_off", gilfoyle_off_command))
     app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("capture", capture_command))
+    app.add_handler(CommandHandler("quest", quest_command))
     app.add_handler(CommandHandler("quiz", quiz_command))
     app.add_handler(CommandHandler("task", task_command))
     app.add_handler(CommandHandler("think", think_command))

@@ -378,21 +378,41 @@ def _try_plain_response(prompt: str, gilfoyle_mode: bool = False) -> Optional[Di
 def _build_learning_options(chat_id: int) -> Dict:
     from tasks import get_weak_topic, get_task, TASK_TOPICS
     from quiz import QUIZ_TOPICS
+    from sre_roadmap import get_current_skill
+    from quests import get_next_quest_step
+
+    # Если есть активный квест — его шаг первым в списке
+    quest_step = get_next_quest_step(chat_id)
 
     weak_topic = get_weak_topic(chat_id)
     weak_label = QUIZ_TOPICS.get(weak_topic, TASK_TOPICS.get(weak_topic, weak_topic))
     task = get_task(chat_id, preferred_topic=weak_topic)
 
-    options = [
-        f"🧩 Квиз: {weak_label} — цель 4/5 правильных (/quiz)",
-        f"🔧 Задача: {task['title']} — выполнить команду и ответить (/task)",
-        "🃏 Флешкарты — повторить 5 карточек (/flash)",
+    current_skill = get_current_skill(chat_id, weak_topic)
+    skill_hint = f" (скилл: {current_skill['label']})" if current_skill else ""
+    criteria = current_skill["criteria"] if current_skill else ""
+    skill_text = f"\nСкилл: «{current_skill['label']}» — {criteria}" if current_skill else ""
+
+    options = []
+    if quest_step:
+        options.append(
+            f"🗺 Квест «{quest_step['quest_label']}» шаг {quest_step['done'] + 1}/{quest_step['total']}: "
+            f"{quest_step['label']} (/{quest_step['action']})"
+        )
+
+    options += [
+        f"🧩 Квиз: {weak_label}{skill_hint} — цель 4/5 правильных (/quiz)",
+        f"🔧 Задача: {task['title']} — выполнить и ответить (/task)",
     ]
+    if not quest_step:
+        options.append("🃏 Флешкарты — 5 карточек подряд (/flash)")
+
+    quest_prefix = f"Квест: {quest_step['quest_label']} → {quest_step['label']}\n" if quest_step else ""
 
     return {
         "mode": "learning",
-        "text": f"Учебный режим. Слабая тема: {weak_label}. Выбери формат:",
-        "options": options,
+        "text": f"{quest_prefix}Учебный режим. Слабая тема: {weak_label}.{skill_text}\nВыбери формат:",
+        "options": options[:3],
     }
 
 

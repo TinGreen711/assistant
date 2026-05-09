@@ -110,6 +110,7 @@ def _fmt_eta(months_remaining: float | None) -> str:
 
 def format_path(chat_id: int, gilfoyle: bool = False) -> str:
     from xp import format_xp_status
+    from sre_roadmap import get_current_skill
     s = get_path_stats(chat_id)
 
     lw = max(len(sk["label"]) for sk in s["skills"])  # label width
@@ -139,12 +140,22 @@ def format_path(chat_id: int, gilfoyle: bool = False) -> str:
         lines.append(f"Темп: {eta}")
         if s["next_focus"]:
             nf = s["next_focus"]
-            lines.append(f"Фокус: {nf['label']} ({nf['remaining']} сес.)")
+            skill = get_current_skill(chat_id, nf["key"])
+            skill_suffix = f" → {skill['label']}" if skill else ""
+            lines.append(f"Фокус: {nf['label']}{skill_suffix} ({nf['remaining']} сес.)")
     else:
         lines.append(f"⏱ При текущем темпе: {eta}")
         if s["next_focus"]:
             nf = s["next_focus"]
-            lines.append(f"🎯 Следующий фокус: {nf['label']} — ещё {nf['remaining']} сессий")
+            skill = get_current_skill(chat_id, nf["key"])
+            skill_suffix = f" → скилл «{skill['label']}»" if skill else ""
+            lines.append(f"🎯 Следующий фокус: {nf['label']}{skill_suffix} — ещё {nf['remaining']} сессий")
+
+    # Текущий скилл по главной теме
+    if s["next_focus"]:
+        skill = get_current_skill(chat_id, s["next_focus"]["key"])
+        if skill and not gilfoyle:
+            lines.append(f"📌 Сейчас: {skill['label']} — {skill['criteria']}")
 
     return "\n".join(lines)
 
@@ -258,3 +269,19 @@ def get_readiness_delta_text(chat_id: int) -> str:
         parts.append(f"Общая готовность: {curr['readiness_pct']}% (без изменений)")
 
     return "\n".join(parts) if parts else ""
+
+
+def get_avg_daily_readiness_delta(chat_id: int, days: int = 7) -> float:
+    """Средний прирост готовности в % за последние N дней (0.0 если нет данных)."""
+    cutoff = (datetime.now(TZ).date() - timedelta(days=days)).isoformat()
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT date, readiness_pct FROM readiness_history WHERE chat_id = ? AND date >= ? ORDER BY date",
+            (chat_id, cutoff),
+        ).fetchall()
+    if len(rows) < 2:
+        return 0.0
+    first_pct = rows[0]["readiness_pct"]
+    last_pct = rows[-1]["readiness_pct"]
+    span_days = max(1, len(rows) - 1)
+    return round((last_pct - first_pct) / span_days, 2)

@@ -7,10 +7,11 @@ from state import get_session_state, build_long_horizon_context
 from outcomes import get_recent_statuses
 from strategy_profile import build_strategy_profile
 from domains import assess_domain_alignment, DOMAINS
-from study_tracker import get_streak, studied_today
+from study_tracker import get_streak, studied_today, get_days_idle
 from morning_brief import build_morning_brief
 from state import get_gilfoyle_mode
 from achievements import format_daily_xp
+from skills_path import get_avg_daily_readiness_delta, format_path_short
 
 
 TZ = ZoneInfo(USER_TIMEZONE)
@@ -175,20 +176,39 @@ def assess_pulse(chat_id: int) -> Dict[str, Any]:
     }
 
 
+def _cost_text(chat_id: int, days_idle: int) -> str:
+    """Строка с ценой простоя в % и днях отставания."""
+    avg_delta = get_avg_daily_readiness_delta(chat_id, days=7)
+    if avg_delta <= 0:
+        return ""
+    lost_pct = round(avg_delta * days_idle, 1)
+    readiness_line = format_path_short(chat_id)
+    return (
+        f"Простой {days_idle} дн. — это −{lost_pct}% от темпа.\n"
+        f"{readiness_line}\n"
+        "5 минут /quiz или /flash вернут ~+0.5%."
+    )
+
+
 def build_midday_nudge(chat_id: int) -> Dict[str, Any] | None:
     """Возвращает сообщение если к 14:00 нет учебной сессии, иначе None."""
     if studied_today(chat_id):
         return None
 
     gilfoyle = get_gilfoyle_mode(chat_id)
+    days_idle = get_days_idle(chat_id)
 
     if gilfoyle:
-        text = "14:00. Сессии обучения нет. /study"
+        cost = _cost_text(chat_id, days_idle) if days_idle >= 2 else ""
+        text = f"14:00. Сессии обучения нет. /study\n{cost}".strip()
     else:
+        cost = _cost_text(chat_id, days_idle) if days_idle >= 2 else ""
         text = (
             "📚 Уже 14:00, а учебной сессии сегодня ещё не было.\n"
             "Даже 15 минут считается — нажми /study и залогируй."
         )
+        if cost:
+            text += f"\n\n{cost}"
 
     return {"text": text}
 
@@ -200,12 +220,12 @@ def build_streak_guard(chat_id: int) -> Dict[str, Any] | None:
 
     gilfoyle = get_gilfoyle_mode(chat_id)
     streak = get_streak(chat_id)
+    days_idle = get_days_idle(chat_id)
+    cost = _cost_text(chat_id, days_idle) if days_idle >= 2 else ""
 
     if gilfoyle:
-        if streak > 0:
-            text = f"18:20. Стрик {streak} дн. сгорит в полночь. /study"
-        else:
-            text = "18:20. Сессии нет. /study"
+        base = f"18:20. Стрик {streak} дн. сгорит в полночь. /study" if streak > 0 else "18:20. Сессии нет. /study"
+        text = f"{base}\n{cost}".strip() if cost else base
     else:
         if streak > 0:
             text = (
@@ -218,5 +238,7 @@ def build_streak_guard(chat_id: int) -> Dict[str, Any] | None:
                 "🌆 18:20 — день ещё не закончен.\n"
                 "Учебной сессии сегодня не было. Самое время начать — /study"
             )
+        if cost:
+            text += f"\n\n{cost}"
 
     return {"text": text}
