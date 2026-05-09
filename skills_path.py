@@ -285,3 +285,70 @@ def get_avg_daily_readiness_delta(chat_id: int, days: int = 7) -> float:
     last_pct = rows[-1]["readiness_pct"]
     span_days = max(1, len(rows) - 1)
     return round((last_pct - first_pct) / span_days, 2)
+
+
+def build_progress_chart(chat_id: int, days: int = 7) -> str:
+    cutoff = (datetime.now(TZ).date() - timedelta(days=days)).isoformat()
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT date, readiness_pct, linux_pct, networks_pct, docker_pct, git_pct, ai_pct, prompt_pct
+            FROM readiness_history
+            WHERE chat_id = ? AND date >= ?
+            ORDER BY date
+            """,
+            (chat_id, cutoff),
+        ).fetchall()
+
+    if not rows:
+        return (
+            "Нет данных за последние 7 дней.\n"
+            "Занимайся каждый день — данные начнут накапливаться с завтрашнего утра."
+        )
+
+    BLOCKS = " ▁▂▃▄▅▆▇█"
+
+    def _bar(vals: list[float]) -> str:
+        mn, mx = min(vals), max(vals)
+        rng = mx - mn
+        if rng < 0.1:
+            return "─" * len(vals)
+        return "".join(BLOCKS[round((v - mn) / rng * 8)] for v in vals)
+
+    skill_cols = [
+        ("linux_pct",    "Linux  "),
+        ("networks_pct", "Сети   "),
+        ("docker_pct",   "Docker "),
+        ("git_pct",      "Git    "),
+        ("ai_pct",       "AI     "),
+        ("prompt_pct",   "Prompt "),
+    ]
+
+    first = dict(rows[0])
+    last = dict(rows[-1])
+    total_delta = last["readiness_pct"] - first["readiness_pct"]
+    sign = "+" if total_delta >= 0 else ""
+
+    lines = [
+        f"📊 Прогресс за {days} дней ({len(rows)} снапшотов)",
+        f"Готовность: {last['readiness_pct']}% ({sign}{total_delta}%)",
+        "",
+    ]
+
+    for col, label in skill_cols:
+        vals = [dict(r)[col] for r in rows]
+        delta = vals[-1] - vals[0]
+        delta_str = f"+{delta:.1f}%" if delta >= 0 else f"{delta:.1f}%"
+        lines.append(f"`{label} {_bar(vals)} {delta_str}`")
+
+    lines.append("")
+    if total_delta > 2:
+        lines.append("🚀 Ускоряешься — хороший темп!")
+    elif total_delta > 0:
+        lines.append("📈 Стабильный прогресс")
+    elif total_delta == 0:
+        lines.append("➡️ Без изменений за период")
+    else:
+        lines.append("📉 Замедлился — самое время вернуться к занятиям")
+
+    return "\n".join(lines)

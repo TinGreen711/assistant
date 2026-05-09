@@ -93,6 +93,7 @@ from study_tracker import (
 from skills_path import (
     format_path, format_path_short,
     init_readiness_history_db, save_readiness_snapshot, get_readiness_delta_text,
+    build_progress_chart,
 )
 from quiz import (
     init_quiz_db,
@@ -109,6 +110,7 @@ from tasks import (
     format_task,
     format_task_with_hint,
     log_task_completion,
+    get_weak_topic,
     TASK_TOPICS,
 )
 from thinking import (
@@ -926,6 +928,13 @@ async def path_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+async def progress_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    chart = build_progress_chart(update.effective_chat.id, days=7)
+    await update.message.reply_text(chart, parse_mode="Markdown")
+
+
 async def gilfoyle_on_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
@@ -1038,7 +1047,17 @@ async def _send_flash_card(message_target, context: ContextTypes.DEFAULT_TYPE) -
             )
         achivs = check_and_unlock(message_target.chat.id, flash_session_done=True)
         await _send_achievements(message_target, achivs)
-        await send_main_menu(message_target, message_target.chat.id)
+        weak = get_weak_topic(message_target.chat.id)
+        if weak in QUIZ_TOPICS:
+            await message_target.reply_text(
+                "Закрепить квизом?",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🧩 Квиз", callback_data=f"chain_quiz_{weak}"),
+                    InlineKeyboardButton("→ Меню", callback_data="chain_skip"),
+                ]]),
+            )
+        else:
+            await send_main_menu(message_target, message_target.chat.id)
         return
 
     card = cards[idx]
@@ -1108,6 +1127,14 @@ async def send_quiz_question(message_target, context: ContextTypes.DEFAULT_TYPE)
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🔧 Задача", callback_data=f"chain_task_{topic}"),
                     InlineKeyboardButton("→ Готово", callback_data="chain_skip"),
+                ]]),
+            )
+        elif topic in TASK_TOPICS:
+            await message_target.reply_text(
+                "Что дальше?",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔧 Задача по теме", callback_data=f"chain_task_{topic}"),
+                    InlineKeyboardButton("→ Меню", callback_data="chain_skip"),
                 ]]),
             )
         else:
@@ -1996,6 +2023,16 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
         achivs = check_and_unlock(query.message.chat.id, task_completed=completed)
         await _send_achievements(query.message, achivs)
+        if completed and task.get("topic") in QUIZ_TOPICS:
+            await query.message.reply_text(
+                "Закрепить теорией?",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🧩 Квиз по теме", callback_data=f"chain_quiz_{task['topic']}"),
+                    InlineKeyboardButton("→ Меню", callback_data="chain_skip"),
+                ]]),
+            )
+        else:
+            await send_main_menu(query.message, query.message.chat.id)
         return
 
     if data == "cmd_flash":
@@ -2237,6 +2274,7 @@ def main() -> None:
     app.add_handler(CommandHandler("proactive_off", proactive_off_command))
     app.add_handler(CommandHandler("study", study_command))
     app.add_handler(CommandHandler("path", path_command))
+    app.add_handler(CommandHandler("progress", progress_command))
     app.add_handler(CommandHandler("gilfoyle_on", gilfoyle_on_command))
     app.add_handler(CommandHandler("gilfoyle_off", gilfoyle_off_command))
     app.add_handler(CommandHandler("menu", menu_command))
