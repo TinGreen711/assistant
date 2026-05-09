@@ -106,6 +106,9 @@ A single-user Telegram bot with two purposes: productivity advisor (suggests 3 n
 **Recovery:**
 - `recovery.py` — `should_ask_failure_reason()`, `get_failure_reason_buttons()`, `build_recovery()`; triggered when result indicates failure
 
+**Quick capture:**
+- `capture.py` — saves fleeting notes (idea / learned / thought / quote) as Obsidian markdown under `OBSIDIAN_ROOT/captures/`; maintains `captures/index.md`; `read_recent_captures()` feeds the last 7 days into the AI prompt. Triggered by `/capture` command or the "Записать мысль" menu button; also auto-captures the lesson text produced by `review.py` when the user taps "Сохранить урок"
+
 ## Key conventions
 
 **Adding a new command:**
@@ -120,4 +123,4 @@ A single-user Telegram bot with two purposes: productivity advisor (suggests 3 n
 
 **Timezones:** All date/time uses `USER_TIMEZONE` via `ZoneInfo`. Each module defines its own `_today()` / `today_str()` helper locally.
 
-**Callback naming:** `act_N` — action choice, `res_N` — completion result, `fail_N` — failure reason, `cmd_*` — menu, `plan_*` — plan wizard, `quiz_*` / `task_*` / `flash_*` / `think_*` — learning module flows.
+**Callback naming:** `act_N` — action choice, `res_N` — completion result, `fail_N` — failure reason, `cmd_*` — menu, `plan_*` — plan wizard, `cap_type_*` — capture type selection, `quiz_*` / `task_*` / `flash_*` / `think_*` — learning module flows.
