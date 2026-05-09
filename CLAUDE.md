@@ -30,7 +30,14 @@ USER_TIMEZONE=Asia/Tashkent
 MAX_OUTPUT_TOKENS=260
 MAX_DECISION_DEPTH=3
 DAILY_MEMORY_LIMIT=5
+DEFAULT_MORNING_HOUR=8
+DEFAULT_MORNING_MINUTE=0
+DEFAULT_EVENING_HOUR=21
+DEFAULT_EVENING_MINUTE=0
+DEBUG=true
 ```
+
+All env vars are loaded and validated by `config.py`; import from there, never directly from `os.getenv`.
 
 ## Architecture
 
@@ -56,25 +63,25 @@ A single-user Telegram bot with two purposes: productivity advisor (suggests 3 n
 **State and persistence:**
 - `state.py` — SQLite session state per `chat_id`: active mode/request/action, daily plan, weekly/monthly goals, proactive settings, Gilfoyle mode
 - `memory.py` — Obsidian markdown under `OBSIDIAN_ROOT`: profile goals/constraints, daily logs, decisions, weekly summaries — fed into the AI prompt as long-term context
-- `session_memory.py` — short-term notes in SQLite (`lesson`, `closing`, `plan` types); last 7 days injected into AI prompt
+- `session_memory.py` — short-term notes in SQLite (`lesson`, `closing`, `plan`, `study` types); last 7 days injected into AI prompt
 - `data/bot_persistence.pkl` — python-telegram-bot `PicklePersistence` for PTB-internal conversation state
 - `data/assistant.db` — SQLite for all structured data
 
 ## Module reference
 
 **Intelligence pipeline:**
-- `router.py` — keyword/regex scoring → `mode`; run standalone to test classification
+- `router.py` — keyword/regex scoring → `mode`; run standalone to test classification (several other modules also support `python <module>.py` for quick smoke tests: `review.py`, `recovery.py`, `outcomes.py`, `protocols.py`, `strategy_profile.py`, `weekly_summary.py`)
 - `protocols.py` — per-mode `Protocol` dataclass: allowed/forbidden actions, completion buttons, `max_depth`
 - `adaptation.py` — `build_adaptation_hints()`, `filter_options()`, `complete_options()`
 - `outcomes.py` — `log_outcome()`, `get_recent_outcomes()`, `build_outcome_hints()`
-- `brain.py` — `generate_options()`, `SYSTEM_PROMPT`, `GILFOYLE_PROMPT`, `JSON_SCHEMA`; Gilfoyle mode is toggled globally per chat
+- `brain.py` — `generate_options()`, `SYSTEM_PROMPT`, `GILFOYLE_PROMPT`, `JSON_SCHEMA`; Gilfoyle mode is toggled globally per chat. Uses the **OpenAI Responses API** (`client.responses.create`), not Chat Completions — params are `instructions`/`input`, response is `.output_text`. Do not refactor to `chat.completions.create`. Three-tier fallback: structured JSON schema → plain text extraction → static `_fallback_by_mode()`
 
 **Daily / weekly flow:**
 - `priority_engine.py` — `build_daily_plan()`, `build_focus_hints()` using energy/time inputs
 - `daily_cycle.py` — daily closing summary
 - `morning_brief.py` — morning brief text + `IT_WORDS` list (source for flashcards)
 - `weekly_summary.py` — `generate_weekly_summary()` via OpenAI
-- `proactive.py` — scheduled messages: check-in, midday nudge, evening reminder, pulse, streak guard; jobs restored on restart via `restore_proactive_jobs()`
+- `proactive.py` — message content builders only: `build_checkin()`, `build_evening_reminder()`, `assess_pulse()`, `build_midday_nudge()`, `build_streak_guard()`; job scheduling and `restore_proactive_jobs()` live in `bot.py`
 - `domains.py` — 6 life domains: `assistant_project`, `income`, `learning`, `work`, `health`, `family`
 - `strategy_profile.py` — strategic profile context injected into proactive messages
 
@@ -89,6 +96,12 @@ A single-user Telegram bot with two purposes: productivity advisor (suggests 3 n
 - `xp.py` — XP per source type, 7-level SRE progression (Стажёр → Senior SRE)
 - `achievements.py` — badges for milestones (streaks, XP thresholds, first completions per module)
 - `stats.py` — aggregates all learning data into `/stats` and weekly report
+
+**Post-action review:**
+- `review.py` — `classify_result()` (keyword-based Russian text → `success`/`partial`/`blocked`/`unclear`), `build_review()` (generates summary, lesson, next direction, and `next_prompt` string). In `bot.py` the `next_prompt` is combined with `build_outcome_hints()` and passed as `user_text` directly into `generate_options()` to produce the next set of action buttons
+
+**Skills progress:**
+- `skills_path.py` — tracks weighted progress toward Junior SRE across 6 topics (linux, networks, docker, git, ai, prompt); `format_path()` / `format_path_short()` render progress bars; `get_path_stats()` returns ETA in months
 
 **Recovery:**
 - `recovery.py` — `should_ask_failure_reason()`, `get_failure_reason_buttons()`, `build_recovery()`; triggered when result indicates failure

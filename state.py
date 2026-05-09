@@ -2,6 +2,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+from zoneinfo import ZoneInfo
 
 from config import (
     ASSISTANT_DB_PATH,
@@ -9,28 +10,30 @@ from config import (
     DEFAULT_MORNING_MINUTE,
     DEFAULT_EVENING_HOUR,
     DEFAULT_EVENING_MINUTE,
+    USER_TIMEZONE,
 )
 
 
 DB_PATH = Path(ASSISTANT_DB_PATH)
+TZ = ZoneInfo(USER_TIMEZONE)
 
 
 def _now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    return datetime.now(TZ).strftime("%Y-%m-%d")
 
 
 def current_week_key() -> str:
-    now = datetime.now()
+    now = datetime.now(TZ)
     iso_year, iso_week, _ = now.isocalendar()
     return f"{iso_year}-W{iso_week:02d}"
 
 
 def current_month_key() -> str:
-    return datetime.now().strftime("%Y-%m")
+    return datetime.now(TZ).strftime("%Y-%m")
 
 
 def _connect() -> sqlite3.Connection:
