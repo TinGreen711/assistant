@@ -1,8 +1,8 @@
 import logging
 
-from openai import OpenAI
+from openai_client import client
 
-from config import OPENAI_API_KEY, OPENAI_CHAT_MODEL
+from config import OPENAI_CHAT_MODEL
 
 logger = logging.getLogger(__name__)
 from memory import (
@@ -13,7 +13,6 @@ from memory import (
 )
 
 
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 SYSTEM_PROMPT = """

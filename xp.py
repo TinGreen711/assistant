@@ -1,4 +1,5 @@
-import sqlite3
+import db
+import html
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any
@@ -30,7 +31,7 @@ XP_REWARDS: Dict[str, int] = {
 
 
 def init_xp_db() -> None:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS xp_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,7 +44,7 @@ def init_xp_db() -> None:
 
 
 def get_total_xp(chat_id: int) -> int:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(amount), 0) FROM xp_log WHERE chat_id = ?",
             (chat_id,),
@@ -90,7 +91,7 @@ def add_xp(chat_id: int, source: str, amount: int | None = None) -> Dict[str, An
     old_level = get_level_info(old_xp)["level"]
 
     today = datetime.now(TZ).strftime("%Y-%m-%d")
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
             "INSERT INTO xp_log (chat_id, date, source, amount) VALUES (?, ?, ?, ?)",
             (chat_id, today, source, amount),
@@ -119,4 +120,4 @@ def format_xp_status(chat_id: int) -> str:
 
 
 def format_levelup(info: Dict[str, Any]) -> str:
-    return f"🎉 Новый уровень: *{info['name']}*!\nВсего XP: {info['xp']}"
+    return f"🎉 Новый уровень: <b>{html.escape(info['name'])}</b>!\nВсего XP: {info['xp']}"

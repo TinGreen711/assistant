@@ -1,4 +1,5 @@
-import sqlite3
+import db
+import html
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from typing import List, Dict, Any
@@ -12,7 +13,7 @@ INTERVALS = [1, 3, 7, 14]  # days by streak level: 0→1d, 1→3d, 2→7d, 3+→
 
 
 def init_flash_db() -> None:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS flash_progress (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,7 +34,7 @@ def get_session_cards(chat_id: int, n: int = FLASH_SESSION_SIZE) -> List[Dict[st
     today = _today()
     by_word = {w["word"]: w for w in IT_WORDS}
 
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         due = [
             r[0] for r in conn.execute(
                 "SELECT word FROM flash_progress WHERE chat_id = ? AND next_review <= ? ORDER BY next_review ASC",
@@ -55,7 +56,7 @@ def get_session_cards(chat_id: int, n: int = FLASH_SESSION_SIZE) -> List[Dict[st
 
 def update_card(chat_id: int, word: str, knew: bool) -> None:
     today = _today()
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         row = conn.execute(
             "SELECT streak FROM flash_progress WHERE chat_id = ? AND word = ?",
             (chat_id, word),
@@ -76,15 +77,15 @@ def update_card(chat_id: int, word: str, knew: bool) -> None:
 
 
 def format_card_front(card: Dict[str, Any], idx: int, total: int) -> str:
-    return f"🃏 *{card['word']}* ({idx}/{total})\n\nКак переводится?"
+    return f"🃏 <b>{html.escape(card['word'])}</b> ({idx}/{total})\n\nКак переводится?"
 
 
 def format_card_back(card: Dict[str, Any], knew: bool) -> str:
     result = "✅ Знал!" if knew else "❌ Не знал"
     return (
         f"{result}\n\n"
-        f"*{card['word']}* — {card['translation']}\n"
-        f"_{card['example']}_"
+        f"<b>{html.escape(card['word'])}</b> — {html.escape(card['translation'])}\n"
+        f"<i>{html.escape(card['example'])}</i>"
     )
 
 

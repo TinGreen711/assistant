@@ -1,5 +1,5 @@
 import random
-import sqlite3
+import db
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, List, Any
@@ -751,7 +751,7 @@ QUESTIONS: Dict[str, List[Dict[str, Any]]] = {
 
 
 def init_quiz_db() -> None:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS quiz_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -766,7 +766,7 @@ def init_quiz_db() -> None:
 
 def log_quiz_result(chat_id: int, topic: str, correct: int, total: int) -> None:
     today = datetime.now(TZ).strftime("%Y-%m-%d")
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
             "INSERT INTO quiz_results (chat_id, date, topic, correct, total) VALUES (?, ?, ?, ?, ?)",
             (chat_id, today, topic, correct, total),

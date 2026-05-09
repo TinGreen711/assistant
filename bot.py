@@ -4,7 +4,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ChatAction
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -16,11 +16,10 @@ from telegram.ext import (
     JobQueue,
 )
 
-from openai import OpenAI
+from openai_client import client
 
 from config import (
     TELEGRAM_BOT_TOKEN,
-    OPENAI_API_KEY,
     OPENAI_TRANSCRIBE_MODEL,
     DAILY_MEMORY_LIMIT,
     MAX_DECISION_DEPTH,
@@ -91,7 +90,10 @@ from study_tracker import (
     format_study_stats,
     TOPICS,
 )
-from skills_path import format_path, format_path_short
+from skills_path import (
+    format_path, format_path_short,
+    init_readiness_history_db, save_readiness_snapshot, get_readiness_delta_text,
+)
 from quiz import (
     init_quiz_db,
     get_questions,
@@ -131,13 +133,12 @@ from achievements import init_achievements_db, check_and_unlock, format_achievem
 from capture import save_capture, CAPTURE_TYPES
 
 
-client = OpenAI(api_key=OPENAI_API_KEY)
 TZ = ZoneInfo(USER_TIMEZONE)
 
 
 async def _send_achievements(target, keys: list[str]) -> None:
     for key in keys:
-        await target.reply_text(f"🏅 Ачивка!\n{format_achievement(key)}", parse_mode="Markdown")
+        await target.reply_text(f"🏅 Ачивка!\n{format_achievement(key)}", parse_mode=ParseMode.HTML)
 
 
 def log(*args: object) -> None:
@@ -187,7 +188,28 @@ def build_capture_type_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def build_main_menu_keyboard(gilfoyle: bool = False) -> InlineKeyboardMarkup:
+def resolve_now_action(chat_id: int) -> tuple[str, str]:
+    """Возвращает (label, callback_data) для контекстной кнопки «Что сейчас?»."""
+    hour = datetime.now(TZ).hour
+    state = get_session_state(chat_id) or {}
+    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    plan_done = bool(state.get("daily_plan_done") and state.get("current_day") == today)
+    day_closed = bool(state.get("daily_closed"))
+
+    if hour < 12:
+        if not plan_done:
+            return "🗓 Начать план дня", "cmd_plan"
+        return "🧩 Квиз по слабой теме", "cmd_quiz"
+    elif hour < 18:
+        return "🔧 Практическая задача", "cmd_task"
+    elif hour < 22:
+        if plan_done and not day_closed:
+            return "🌙 Закрыть день", "cmd_close"
+        return "🃏 Флешкарты", "cmd_flash"
+    return "🃏 Флешкарты", "cmd_flash"
+
+
+def build_full_menu_keyboard(gilfoyle: bool = False) -> InlineKeyboardMarkup:
     gilfoyle_label = "👤 Обычный режим" if gilfoyle else "🤖 Режим Гилфойла"
     gilfoyle_cmd = "cmd_gilfoyle_off" if gilfoyle else "cmd_gilfoyle_on"
     rows = [
@@ -211,6 +233,25 @@ def build_main_menu_keyboard(gilfoyle: bool = False) -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="🔕 off", callback_data="cmd_proactive_off"),
          InlineKeyboardButton(text=gilfoyle_label, callback_data=gilfoyle_cmd)],
         [InlineKeyboardButton(text="♻️ Сбросить сессию", callback_data="cmd_reset")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def build_main_menu_keyboard(gilfoyle: bool = False, chat_id: int | None = None) -> InlineKeyboardMarkup:
+    gilfoyle_label = "👤 Обычный режим" if gilfoyle else "🤖 Режим Гилфойла"
+    gilfoyle_cmd = "cmd_gilfoyle_off" if gilfoyle else "cmd_gilfoyle_on"
+
+    if chat_id is not None:
+        now_label, now_cmd = resolve_now_action(chat_id)
+    else:
+        now_label, now_cmd = "🎯 Что сейчас?", "cmd_quiz"
+
+    rows = [
+        [InlineKeyboardButton(text=now_label, callback_data=now_cmd)],
+        [InlineKeyboardButton(text="📊 Прогресс", callback_data="cmd_path"),
+         InlineKeyboardButton(text="📝 Записать мысль", callback_data="cmd_capture")],
+        [InlineKeyboardButton(text="☰ Все команды", callback_data="cmd_more"),
+         InlineKeyboardButton(text=gilfoyle_label, callback_data=gilfoyle_cmd)],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -402,17 +443,22 @@ async def morning_checkin_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=chat_id,
         text=payload["text"],
-        reply_markup=build_main_menu_keyboard(),
+        reply_markup=build_main_menu_keyboard(chat_id=chat_id),
     )
 
 
 async def evening_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = context.job.chat_id
+    save_readiness_snapshot(chat_id)
+    delta_text = get_readiness_delta_text(chat_id)
     payload = build_evening_reminder(chat_id)
+    text = payload["text"]
+    if delta_text:
+        text += f"\n\n{delta_text}"
     await context.bot.send_message(
         chat_id=chat_id,
-        text=payload["text"],
-        reply_markup=build_main_menu_keyboard(),
+        text=text,
+        reply_markup=build_main_menu_keyboard(chat_id=chat_id),
     )
 
 
@@ -424,7 +470,7 @@ async def midday_nudge_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=chat_id,
         text=payload["text"],
-        reply_markup=build_main_menu_keyboard(),
+        reply_markup=build_main_menu_keyboard(chat_id=chat_id),
     )
 
 
@@ -436,7 +482,7 @@ async def streak_guard_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=chat_id,
         text=payload["text"],
-        reply_markup=build_main_menu_keyboard(),
+        reply_markup=build_main_menu_keyboard(chat_id=chat_id),
     )
 
 
@@ -453,7 +499,7 @@ async def send_main_menu(message_target, chat_id: int | None = None) -> None:
     gf = get_gilfoyle_mode(chat_id) if chat_id else False
     await message_target.reply_text(
         "Главное меню:",
-        reply_markup=build_main_menu_keyboard(gilfoyle=gf),
+        reply_markup=build_main_menu_keyboard(gilfoyle=gf, chat_id=chat_id),
     )
 
 
@@ -571,7 +617,8 @@ async def run_daily_closing(message_target, chat_id: int) -> None:
         f"- daily_closed: true"
     )
 
-    await message_target.reply_text(closing_text)
+    readiness = format_path_short(chat_id)
+    await message_target.reply_text(f"{closing_text}\n\n{readiness}")
 
 
 async def send_action_options(
@@ -661,6 +708,7 @@ async def send_action_options(
         user_text,
         extra_hints=combined_hints,
         gilfoyle_mode=get_gilfoyle_mode(message_target.chat.id),
+        chat_id=message_target.chat.id,
     )
     mode = str(data.get("mode", pre_mode)).strip() or pre_mode
     text = (data.get("text") or "Выбери действие:").strip()
@@ -764,7 +812,9 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     clear_session_state(update.effective_chat.id)
 
     if update.message:
-        await update.message.reply_text("Сессия сброшена. Начинаем заново.")
+        await update.message.reply_text(
+            "Сессия сброшена. Цели недели/месяца и расписание сохранены."
+        )
         await send_main_menu(update.message, update.effective_chat.id)
 
 
@@ -925,7 +975,7 @@ async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(
         format_task(task),
         reply_markup=build_task_keyboard(),
-        parse_mode="Markdown",
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -958,10 +1008,14 @@ async def _send_flash_card(message_target, context: ContextTypes.DEFAULT_TYPE) -
         known = state["known"]
         context.user_data.pop("flash_state", None)
         xp_result = add_xp(message_target.chat.id, "flash_session")
-        result_text = format_session_result(known, total) + f"\n+{xp_result['amount']} XP"
+        flash_readiness_line = format_path_short(message_target.chat.id)
+        result_text = format_session_result(known, total) + f"\n+{xp_result['amount']} XP\n\n{flash_readiness_line}"
         await message_target.reply_text(result_text)
         if xp_result["leveled_up"]:
-            await message_target.reply_text(format_levelup(xp_result["info"]), parse_mode="Markdown")
+            await message_target.reply_text(
+                format_levelup(xp_result["info"]) + f"\n{flash_readiness_line}",
+                parse_mode=ParseMode.HTML,
+            )
         achivs = check_and_unlock(message_target.chat.id, flash_session_done=True)
         await _send_achievements(message_target, achivs)
         await send_main_menu(message_target, message_target.chat.id)
@@ -975,7 +1029,7 @@ async def _send_flash_card(message_target, context: ContextTypes.DEFAULT_TYPE) -
     await message_target.reply_text(
         format_card_front(card, idx + 1, total),
         reply_markup=keyboard,
-        parse_mode="Markdown",
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -1017,11 +1071,15 @@ async def send_quiz_question(message_target, context: ContextTypes.DEFAULT_TYPE)
         is_chain = state.get("chain", False)
         context.user_data.pop("quiz_state", None)
 
+        readiness_line = format_path_short(message_target.chat.id)
         await message_target.reply_text(
-            f"{score_text}\n\n🔥 Стрик: {streak} дн.\n+{xp_result['amount']} XP"
+            f"{score_text}\n\n🔥 Стрик: {streak} дн.\n+{xp_result['amount']} XP\n\n{readiness_line}"
         )
         if xp_result["leveled_up"]:
-            await message_target.reply_text(format_levelup(xp_result["info"]), parse_mode="Markdown")
+            await message_target.reply_text(
+                format_levelup(xp_result["info"]) + f"\n{readiness_line}",
+                parse_mode=ParseMode.HTML,
+            )
         achivs = check_and_unlock(message_target.chat.id, quiz_correct=correct, quiz_total=total)
         await _send_achievements(message_target, achivs)
         if is_chain and topic in TASK_TOPICS:
@@ -1706,8 +1764,15 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if data == "cmd_reset":
         context.user_data.clear()
         clear_session_state(query.message.chat.id)
-        await query.message.reply_text("Сессия сброшена.")
+        await query.message.reply_text(
+            "Сессия сброшена. Цели недели/месяца и расписание сохранены."
+        )
         await send_main_menu(query.message)
+        return
+
+    if data == "cmd_more":
+        gf = get_gilfoyle_mode(query.message.chat.id)
+        await query.message.reply_text("Все команды:", reply_markup=build_full_menu_keyboard(gilfoyle=gf))
         return
 
     if data == "cmd_plan":
@@ -1791,7 +1856,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.message.reply_text(
             format_task(task),
             reply_markup=build_task_keyboard(),
-            parse_mode="Markdown",
+            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -1819,7 +1884,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.edit_message_text(
             format_task(task),
             reply_markup=build_task_keyboard(),
-            parse_mode="Markdown",
+            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -1836,7 +1901,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.edit_message_text(
             format_task_with_hint(task),
             reply_markup=build_task_keyboard(hint_shown=True),
-            parse_mode="Markdown",
+            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -1862,8 +1927,9 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         xp_result = add_xp(query.message.chat.id, "task_done" if completed else "task_fail")
         context.user_data.pop("task_state", None)
 
+        task_readiness_line = format_path_short(query.message.chat.id)
         if completed:
-            result_text = f"✅ Отлично! Задача выполнена.\n{task['title']}\n\n🔥 Стрик: {streak} дн.\n+{xp_result['amount']} XP"
+            result_text = f"✅ Отлично! Задача выполнена.\n{task['title']}\n\n🔥 Стрик: {streak} дн.\n+{xp_result['amount']} XP\n\n{task_readiness_line}"
         else:
             result_text = (
                 f"❌ Не получилось — бывает.\n\n"
@@ -1872,7 +1938,10 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
         await query.edit_message_text(result_text)
         if xp_result["leveled_up"]:
-            await query.message.reply_text(format_levelup(xp_result["info"]), parse_mode="Markdown")
+            await query.message.reply_text(
+                format_levelup(xp_result["info"]) + f"\n{task_readiness_line}",
+                parse_mode=ParseMode.HTML,
+            )
         achivs = check_and_unlock(query.message.chat.id, task_completed=completed)
         await _send_achievements(query.message, achivs)
         return
@@ -1895,7 +1964,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         state["idx"] += 1
         await query.edit_message_text(
             format_card_back(card, knew),
-            parse_mode="Markdown",
+            parse_mode=ParseMode.HTML,
         )
         await _send_flash_card(query.message, context)
         return
@@ -1989,9 +2058,13 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         streak = get_streak(chat_id)
         save_memory_note(chat_id, "study", f"Изучал: {label}")
         xp_result = add_xp(chat_id, "study")
-        await query.edit_message_text(f"✅ {label} — записано\n🔥 Стрик: {streak} дн.\n+{xp_result['amount']} XP")
+        study_readiness_line = format_path_short(chat_id)
+        await query.edit_message_text(f"✅ {label} — записано\n🔥 Стрик: {streak} дн.\n+{xp_result['amount']} XP\n\n{study_readiness_line}")
         if xp_result["leveled_up"]:
-            await query.message.reply_text(format_levelup(xp_result["info"]), parse_mode="Markdown")
+            await query.message.reply_text(
+                format_levelup(xp_result["info"]) + f"\n{study_readiness_line}",
+                parse_mode=ParseMode.HTML,
+            )
         achivs = check_and_unlock(chat_id)
         await _send_achievements(query.message, achivs)
         has_quiz = topic in QUIZ_TOPICS
@@ -2092,6 +2165,7 @@ def main() -> None:
     init_flash_db()
     init_xp_db()
     init_achievements_db()
+    init_readiness_history_db()
 
     persistence = PicklePersistence(filepath=str(Path(ASSISTANT_DB_PATH).parent / "bot_persistence.pkl"))
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).persistence(persistence).build()

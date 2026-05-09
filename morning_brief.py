@@ -1,10 +1,11 @@
-import sqlite3
+import db
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional
 
 from config import ASSISTANT_DB_PATH, USER_TIMEZONE
 from study_tracker import get_streak, get_stats, TOPICS
+from skills_path import format_path_short
 
 
 TZ = ZoneInfo(USER_TIMEZONE)
@@ -126,7 +127,7 @@ IT_WORDS = [
 
 
 def _get_last_session(chat_id: int) -> Optional[Dict[str, Any]]:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         row = conn.execute(
             "SELECT topic, date FROM study_sessions WHERE chat_id = ? ORDER BY date DESC, id DESC LIMIT 1",
             (chat_id,),
@@ -148,7 +149,7 @@ def _get_last_session(chat_id: int) -> Optional[Dict[str, Any]]:
 
 
 def _get_topic_session_count(chat_id: int, topic: str) -> int:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         row = conn.execute(
             "SELECT COUNT(*) FROM study_sessions WHERE chat_id = ? AND topic = ?",
             (chat_id, topic),
@@ -157,7 +158,7 @@ def _get_topic_session_count(chat_id: int, topic: str) -> int:
 
 
 def _get_total_session_count(chat_id: int) -> int:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         row = conn.execute(
             "SELECT COUNT(*) FROM study_sessions WHERE chat_id = ?",
             (chat_id,),
@@ -175,7 +176,7 @@ def _pick_word(total_sessions: int) -> Dict[str, str]:
 
 
 def _get_weak_topics(chat_id: int, limit: int = 1) -> list:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         quiz_rows = conn.execute(
             """SELECT topic, SUM(correct), SUM(total)
                FROM quiz_results WHERE chat_id = ?
@@ -296,5 +297,7 @@ def build_morning_brief(chat_id: int, gilfoyle: bool = False) -> str:
     if weak:
         w = weak[0]
         lines.append(f"⚠️ Слабое место: {w['label']} — {w['hint']}. Стоит повторить.")
+
+    lines.append(format_path_short(chat_id))
 
     return "\n\n".join(lines)

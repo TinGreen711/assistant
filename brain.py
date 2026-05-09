@@ -5,10 +5,9 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from openai import OpenAI
+from openai_client import client
 
 from config import (
-    OPENAI_API_KEY,
     OPENAI_CHAT_MODEL,
     MAX_OUTPUT_TOKENS,
     DAILY_MEMORY_LIMIT,
@@ -16,9 +15,6 @@ from config import (
 from memory import read_profile, read_last_daily_entries
 from router import classify_request
 from protocols import build_protocol_prompt, get_protocol
-
-
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 GILFOYLE_PROMPT = """
@@ -379,9 +375,33 @@ def _try_plain_response(prompt: str, gilfoyle_mode: bool = False) -> Optional[Di
     return None
 
 
-def generate_options(user_text: str, extra_hints: str = "", gilfoyle_mode: bool = False) -> Dict:
+def _build_learning_options(chat_id: int) -> Dict:
+    from tasks import get_weak_topic, get_task, TASK_TOPICS
+    from quiz import QUIZ_TOPICS
+
+    weak_topic = get_weak_topic(chat_id)
+    weak_label = QUIZ_TOPICS.get(weak_topic, TASK_TOPICS.get(weak_topic, weak_topic))
+    task = get_task(chat_id, preferred_topic=weak_topic)
+
+    options = [
+        f"🧩 Квиз: {weak_label} — цель 4/5 правильных (/quiz)",
+        f"🔧 Задача: {task['title']} — выполнить команду и ответить (/task)",
+        "🃏 Флешкарты — повторить 5 карточек (/flash)",
+    ]
+
+    return {
+        "mode": "learning",
+        "text": f"Учебный режим. Слабая тема: {weak_label}. Выбери формат:",
+        "options": options,
+    }
+
+
+def generate_options(user_text: str, extra_hints: str = "", gilfoyle_mode: bool = False, chat_id: int | None = None) -> Dict:
     prompt, route = _build_prompt(user_text, extra_hints=extra_hints)
     mode = route["mode"]
+
+    if mode == "learning" and chat_id is not None:
+        return _build_learning_options(chat_id)
 
     try:
         data = _try_structured_response(prompt, gilfoyle_mode=gilfoyle_mode)

@@ -1,4 +1,4 @@
-import sqlite3
+import db
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -21,7 +21,7 @@ TOPICS: Dict[str, str] = {
 
 
 def init_study_db() -> None:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS study_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +34,7 @@ def init_study_db() -> None:
 
 def log_session(chat_id: int, topic: str) -> None:
     today = datetime.now(TZ).strftime("%Y-%m-%d")
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
             "INSERT INTO study_sessions (chat_id, date, topic) VALUES (?, ?, ?)",
             (chat_id, today, topic),
@@ -43,7 +43,7 @@ def log_session(chat_id: int, topic: str) -> None:
 
 def studied_today(chat_id: int) -> bool:
     today = datetime.now(TZ).strftime("%Y-%m-%d")
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         row = conn.execute(
             "SELECT 1 FROM study_sessions WHERE chat_id = ? AND date = ? LIMIT 1",
             (chat_id, today),
@@ -52,7 +52,7 @@ def studied_today(chat_id: int) -> bool:
 
 
 def get_streak(chat_id: int) -> int:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         rows = conn.execute(
             "SELECT DISTINCT date FROM study_sessions WHERE chat_id = ? ORDER BY date DESC",
             (chat_id,),
@@ -82,7 +82,7 @@ def get_streak(chat_id: int) -> int:
 
 
 def get_stats(chat_id: int) -> Dict[str, Any]:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         rows = conn.execute(
             """
             SELECT topic, COUNT(*) as cnt, MAX(date) as last_date

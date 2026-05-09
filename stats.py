@@ -1,4 +1,4 @@
-import sqlite3
+import db
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -22,7 +22,7 @@ def build_stats_text(chat_id: int) -> str:
     study = get_stats(chat_id)
     week = _week_start()
 
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         quiz_rows = conn.execute(
             """SELECT topic, SUM(correct), SUM(total)
                FROM quiz_results WHERE chat_id = ?
@@ -106,7 +106,7 @@ def build_stats_text(chat_id: int) -> str:
 def build_weekly_report_text(chat_id: int) -> str:
     week = _week_start()
 
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         sessions_week = conn.execute(
             """SELECT topic, COUNT(*) FROM study_sessions
                WHERE chat_id = ? AND date >= ? GROUP BY topic""",

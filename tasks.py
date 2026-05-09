@@ -1,5 +1,6 @@
+import html
 import random
-import sqlite3
+import db
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, List, Any, Optional
@@ -358,7 +359,7 @@ TASKS: Dict[str, List[Dict[str, Any]]] = {
 
 
 def init_tasks_db() -> None:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS task_completions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -373,7 +374,7 @@ def init_tasks_db() -> None:
 
 def log_task_completion(chat_id: int, topic: str, title: str, completed: bool) -> None:
     today = datetime.now(TZ).strftime("%Y-%m-%d")
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
             "INSERT INTO task_completions (chat_id, date, topic, title, completed) VALUES (?, ?, ?, ?, ?)",
             (chat_id, today, topic, title, int(completed)),
@@ -381,7 +382,7 @@ def log_task_completion(chat_id: int, topic: str, title: str, completed: bool) -
 
 
 def get_weak_topic(chat_id: int) -> str:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         rows = conn.execute(
             """
             SELECT topic, SUM(correct) * 1.0 / SUM(total) as score
@@ -410,20 +411,20 @@ def get_task(chat_id: int, preferred_topic: str | None = None) -> Dict[str, Any]
 
 def format_task(task: Dict[str, Any]) -> str:
     return (
-        f"Практическая задача — {task['topic_label']}\n\n"
-        f"{task['title']}\n\n"
-        f"{task['description']}\n\n"
-        f"Команда:\n`{task['command']}`\n\n"
-        f"После выполнения: {task['verify']}"
+        f"Практическая задача — {html.escape(task['topic_label'])}\n\n"
+        f"{html.escape(task['title'])}\n\n"
+        f"{html.escape(task['description'])}\n\n"
+        f"Команда:\n<code>{html.escape(task['command'])}</code>\n\n"
+        f"После выполнения: {html.escape(task['verify'])}"
     )
 
 
 def format_task_with_hint(task: Dict[str, Any]) -> str:
     return (
-        f"Практическая задача — {task['topic_label']}\n\n"
-        f"{task['title']}\n\n"
-        f"{task['description']}\n\n"
-        f"Команда:\n`{task['command']}`\n\n"
-        f"Подсказка: {task['hint']}\n\n"
-        f"После выполнения: {task['verify']}"
+        f"Практическая задача — {html.escape(task['topic_label'])}\n\n"
+        f"{html.escape(task['title'])}\n\n"
+        f"{html.escape(task['description'])}\n\n"
+        f"Команда:\n<code>{html.escape(task['command'])}</code>\n\n"
+        f"Подсказка: {html.escape(task['hint'])}\n\n"
+        f"После выполнения: {html.escape(task['verify'])}"
     )

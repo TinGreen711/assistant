@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 from zoneinfo import ZoneInfo
 
+import db
 from config import (
     ASSISTANT_DB_PATH,
     DEFAULT_MORNING_HOUR,
@@ -37,10 +38,7 @@ def current_month_key() -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return db.connect(DB_PATH)
 
 
 def _column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
@@ -114,135 +112,47 @@ def get_session_state(chat_id: int) -> Optional[Dict[str, Any]]:
     return dict(row)
 
 
-def update_session_state(chat_id: int, **fields) -> None:
-    existing = get_session_state(chat_id) or {
-        "chat_id": chat_id,
-        "active_mode": "",
-        "active_request": "",
-        "active_action": "",
-        "active_stage": "",
-        "depth": 0,
-        "last_result": "",
-        "current_day": "",
-        "daily_focus_domain": "",
-        "daily_focus_text": "",
-        "daily_energy": "",
-        "daily_time_budget": "",
-        "daily_plan_done": 0,
-        "daily_closed": 0,
-        "week_key": "",
-        "weekly_goal_domain": "",
-        "weekly_goal_text": "",
-        "weekly_goal_set": 0,
-        "month_key": "",
-        "monthly_focus_domain": "",
-        "monthly_focus_text": "",
-        "monthly_focus_set": 0,
-        "proactive_enabled": 0,
-        "morning_hour": DEFAULT_MORNING_HOUR,
-        "morning_minute": DEFAULT_MORNING_MINUTE,
-        "evening_hour": DEFAULT_EVENING_HOUR,
-        "evening_minute": DEFAULT_EVENING_MINUTE,
-        "updated_at": "",
-    }
+_ALLOWED_FIELDS = frozenset({
+    "active_mode", "active_request", "active_action", "active_stage",
+    "depth", "last_result",
+    "current_day", "daily_focus_domain", "daily_focus_text",
+    "daily_energy", "daily_time_budget", "daily_plan_done", "daily_closed",
+    "week_key", "weekly_goal_domain", "weekly_goal_text", "weekly_goal_set",
+    "month_key", "monthly_focus_domain", "monthly_focus_text", "monthly_focus_set",
+    "proactive_enabled", "morning_hour", "morning_minute",
+    "evening_hour", "evening_minute",
+    "gilfoyle_mode",
+})
 
-    existing.update(fields)
-    existing["updated_at"] = _now_str()
+
+def update_session_state(chat_id: int, **fields) -> None:
+    """Атомарный частичный апдейт session_state.
+
+    Меняет ТОЛЬКО переданные поля — не трогает остальные. Это убирает гонки между
+    параллельными вызовами (джоб + клик пользователя), где раньше read-modify-write
+    через два коннекта мог потерять обновление.
+    """
+    unknown = set(fields) - _ALLOWED_FIELDS
+    if unknown:
+        raise ValueError(f"update_session_state: unknown fields {unknown}")
+
+    if not fields:
+        return
+
+    fields = {**fields, "updated_at": _now_str()}
+    columns = ["chat_id", *fields.keys()]
+    placeholders = ", ".join("?" for _ in columns)
+    col_list = ", ".join(columns)
+    update_clause = ", ".join(f"{c}=excluded.{c}" for c in fields.keys())
+    values = [chat_id, *fields.values()]
+
+    sql = (
+        f"INSERT INTO session_state ({col_list}) VALUES ({placeholders}) "
+        f"ON CONFLICT(chat_id) DO UPDATE SET {update_clause}"
+    )
 
     with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO session_state (
-                chat_id,
-                active_mode,
-                active_request,
-                active_action,
-                active_stage,
-                depth,
-                last_result,
-                current_day,
-                daily_focus_domain,
-                daily_focus_text,
-                daily_energy,
-                daily_time_budget,
-                daily_plan_done,
-                daily_closed,
-                week_key,
-                weekly_goal_domain,
-                weekly_goal_text,
-                weekly_goal_set,
-                month_key,
-                monthly_focus_domain,
-                monthly_focus_text,
-                monthly_focus_set,
-                proactive_enabled,
-                morning_hour,
-                morning_minute,
-                evening_hour,
-                evening_minute,
-                updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(chat_id) DO UPDATE SET
-                active_mode=excluded.active_mode,
-                active_request=excluded.active_request,
-                active_action=excluded.active_action,
-                active_stage=excluded.active_stage,
-                depth=excluded.depth,
-                last_result=excluded.last_result,
-                current_day=excluded.current_day,
-                daily_focus_domain=excluded.daily_focus_domain,
-                daily_focus_text=excluded.daily_focus_text,
-                daily_energy=excluded.daily_energy,
-                daily_time_budget=excluded.daily_time_budget,
-                daily_plan_done=excluded.daily_plan_done,
-                daily_closed=excluded.daily_closed,
-                week_key=excluded.week_key,
-                weekly_goal_domain=excluded.weekly_goal_domain,
-                weekly_goal_text=excluded.weekly_goal_text,
-                weekly_goal_set=excluded.weekly_goal_set,
-                month_key=excluded.month_key,
-                monthly_focus_domain=excluded.monthly_focus_domain,
-                monthly_focus_text=excluded.monthly_focus_text,
-                monthly_focus_set=excluded.monthly_focus_set,
-                proactive_enabled=excluded.proactive_enabled,
-                morning_hour=excluded.morning_hour,
-                morning_minute=excluded.morning_minute,
-                evening_hour=excluded.evening_hour,
-                evening_minute=excluded.evening_minute,
-                updated_at=excluded.updated_at
-            """,
-            (
-                chat_id,
-                existing["active_mode"],
-                existing["active_request"],
-                existing["active_action"],
-                existing["active_stage"],
-                existing["depth"],
-                existing["last_result"],
-                existing["current_day"],
-                existing["daily_focus_domain"],
-                existing["daily_focus_text"],
-                existing["daily_energy"],
-                existing["daily_time_budget"],
-                existing["daily_plan_done"],
-                existing["daily_closed"],
-                existing["week_key"],
-                existing["weekly_goal_domain"],
-                existing["weekly_goal_text"],
-                existing["weekly_goal_set"],
-                existing["month_key"],
-                existing["monthly_focus_domain"],
-                existing["monthly_focus_text"],
-                existing["monthly_focus_set"],
-                existing["proactive_enabled"],
-                existing["morning_hour"],
-                existing["morning_minute"],
-                existing["evening_hour"],
-                existing["evening_minute"],
-                existing["updated_at"],
-            ),
-        )
+        conn.execute(sql, values)
         conn.commit()
 
 
@@ -419,6 +329,28 @@ def get_gilfoyle_mode(chat_id: int) -> bool:
 
 
 def clear_session_state(chat_id: int) -> None:
+    """Сбрасывает только активную сессию: текущий запрос/действие/фокус дня.
+    Долгосрочные настройки (цели недели/месяца, расписание, гилфойл) сохраняются."""
     with _connect() as conn:
-        conn.execute("DELETE FROM session_state WHERE chat_id = ?", (chat_id,))
+        conn.execute(
+            """
+            UPDATE session_state SET
+                active_mode = '',
+                active_request = '',
+                active_action = '',
+                active_stage = '',
+                depth = 0,
+                last_result = '',
+                current_day = '',
+                daily_focus_domain = '',
+                daily_focus_text = '',
+                daily_energy = '',
+                daily_time_budget = '',
+                daily_plan_done = 0,
+                daily_closed = 0,
+                updated_at = ?
+            WHERE chat_id = ?
+            """,
+            (_now_str(), chat_id),
+        )
         conn.commit()

@@ -1,4 +1,4 @@
-import sqlite3
+import db
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, List
@@ -26,7 +26,7 @@ def _bar(pct: float, width: int = BAR_W) -> str:
 
 
 def _get_session_counts(chat_id: int) -> Dict[str, int]:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         rows = conn.execute(
             "SELECT topic, COUNT(*) FROM study_sessions WHERE chat_id = ? GROUP BY topic",
             (chat_id,),
@@ -36,7 +36,7 @@ def _get_session_counts(chat_id: int) -> Dict[str, int]:
 
 def _get_weekly_pace(chat_id: int) -> float:
     cutoff = (datetime.now(TZ).date() - timedelta(days=28)).isoformat()
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         row = conn.execute(
             "SELECT COUNT(DISTINCT date) FROM study_sessions WHERE chat_id = ? AND date >= ?",
             (chat_id, cutoff),
@@ -152,3 +152,109 @@ def format_path(chat_id: int, gilfoyle: bool = False) -> str:
 def format_path_short(chat_id: int) -> str:
     s = get_path_stats(chat_id)
     return f"📍 Готовность к Junior SRE: {s['readiness_pct']}% | {_fmt_eta(s['months_remaining'])}"
+
+
+# ─── Readiness history ────────────────────────────────────────────────────────
+
+def init_readiness_history_db() -> None:
+    with db.connect() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS readiness_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                readiness_pct INTEGER NOT NULL,
+                linux_pct REAL NOT NULL DEFAULT 0,
+                networks_pct REAL NOT NULL DEFAULT 0,
+                docker_pct REAL NOT NULL DEFAULT 0,
+                git_pct REAL NOT NULL DEFAULT 0,
+                ai_pct REAL NOT NULL DEFAULT 0,
+                prompt_pct REAL NOT NULL DEFAULT 0,
+                UNIQUE(chat_id, date)
+            )
+        """)
+
+
+def save_readiness_snapshot(chat_id: int) -> None:
+    s = get_path_stats(chat_id)
+    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    skill_pcts = {sk["key"]: sk["pct"] for sk in s["skills"]}
+    with db.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO readiness_history
+                (chat_id, date, readiness_pct, linux_pct, networks_pct, docker_pct, git_pct, ai_pct, prompt_pct)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id, date) DO UPDATE SET
+                readiness_pct=excluded.readiness_pct,
+                linux_pct=excluded.linux_pct,
+                networks_pct=excluded.networks_pct,
+                docker_pct=excluded.docker_pct,
+                git_pct=excluded.git_pct,
+                ai_pct=excluded.ai_pct,
+                prompt_pct=excluded.prompt_pct
+            """,
+            (
+                chat_id, today,
+                s["readiness_pct"],
+                skill_pcts.get("linux", 0),
+                skill_pcts.get("networks", 0),
+                skill_pcts.get("docker", 0),
+                skill_pcts.get("git", 0),
+                skill_pcts.get("ai", 0),
+                skill_pcts.get("prompt", 0),
+            ),
+        )
+
+
+def get_readiness_delta_text(chat_id: int) -> str:
+    today = datetime.now(TZ).date()
+    yesterday = (today - timedelta(days=1)).isoformat()
+    today_str = today.isoformat()
+
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT date, readiness_pct, linux_pct, networks_pct, docker_pct, git_pct, ai_pct, prompt_pct
+            FROM readiness_history
+            WHERE chat_id = ? AND date IN (?, ?)
+            ORDER BY date
+            """,
+            (chat_id, yesterday, today_str),
+        ).fetchall()
+
+    if len(rows) < 2:
+        return ""
+
+    by_date = {row["date"]: dict(row) for row in rows}
+    if yesterday not in by_date or today_str not in by_date:
+        return ""
+
+    prev = by_date[yesterday]
+    curr = by_date[today_str]
+
+    total_delta = curr["readiness_pct"] - prev["readiness_pct"]
+
+    skill_cols = [
+        ("linux_pct", "Linux"),
+        ("networks_pct", "Сети"),
+        ("docker_pct", "Docker"),
+        ("git_pct", "Git"),
+        ("ai_pct", "AI"),
+        ("prompt_pct", "Prompt"),
+    ]
+    moved = []
+    for col, label in skill_cols:
+        d = curr[col] - prev[col]
+        if d >= 0.5:
+            moved.append(f"+{d:.1f}% {label}")
+
+    parts = []
+    if moved:
+        parts.append("📈 Сегодня: " + ", ".join(moved))
+    if total_delta > 0:
+        parts.append(f"Общая готовность: {curr['readiness_pct']}% (+{total_delta}%)")
+    elif total_delta == 0:
+        parts.append(f"Общая готовность: {curr['readiness_pct']}% (без изменений)")
+
+    return "\n".join(parts) if parts else ""

@@ -1,4 +1,4 @@
-import sqlite3
+import db
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -10,7 +10,7 @@ TZ = ZoneInfo(USER_TIMEZONE)
 
 
 def init_session_memory_db() -> None:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS session_memory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +28,7 @@ def save_memory_note(chat_id: int, note_type: str, content: str) -> None:
     content = content.strip()
     if not content:
         return
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
             "INSERT INTO session_memory (chat_id, date, type, content) VALUES (?, ?, ?, ?)",
             (chat_id, today, note_type, content),
@@ -38,7 +38,7 @@ def save_memory_note(chat_id: int, note_type: str, content: str) -> None:
 def get_recent_memory(chat_id: int, days: int = 7) -> Optional[str]:
     """Возвращает заметки за последние N дней в виде строки для промпта."""
     since = (datetime.now(TZ).date() - timedelta(days=days)).isoformat()
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         rows = conn.execute(
             """SELECT date, type, content FROM session_memory
                WHERE chat_id = ? AND date >= ?

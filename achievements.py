@@ -1,4 +1,5 @@
-import sqlite3
+import db
+import html
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Any
@@ -27,7 +28,7 @@ DAILY_XP_GOAL = 50
 
 
 def init_achievements_db() -> None:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS achievements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +41,7 @@ def init_achievements_db() -> None:
 
 
 def get_unlocked(chat_id: int) -> set[str]:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         rows = conn.execute(
             "SELECT key FROM achievements WHERE chat_id = ?", (chat_id,)
         ).fetchall()
@@ -49,7 +50,7 @@ def get_unlocked(chat_id: int) -> set[str]:
 
 def _unlock(chat_id: int, key: str) -> None:
     today = datetime.now(TZ).strftime("%Y-%m-%d")
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO achievements (chat_id, key, date) VALUES (?, ?, ?)",
             (chat_id, key, today),
@@ -71,7 +72,7 @@ def check_and_unlock(
     if not to_check:
         return []
 
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         quiz_count = (conn.execute(
             "SELECT COUNT(*) FROM quiz_results WHERE chat_id = ?", (chat_id,)
         ).fetchone() or [0])[0]
@@ -119,12 +120,12 @@ def check_and_unlock(
 
 def format_achievement(key: str) -> str:
     a = ACHIEVEMENTS[key]
-    return f"{a['emoji']} *{a['name']}* — {a['desc']}"
+    return f"{a['emoji']} <b>{html.escape(a['name'])}</b> — {html.escape(a['desc'])}"
 
 
 def get_today_xp(chat_id: int) -> int:
     today = datetime.now(TZ).strftime("%Y-%m-%d")
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(amount), 0) FROM xp_log WHERE chat_id = ? AND date = ?",
             (chat_id, today),

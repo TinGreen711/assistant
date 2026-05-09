@@ -1,18 +1,17 @@
 import random
-import sqlite3
+import db
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional
 
 import logging
 
-from openai import OpenAI
-from config import ASSISTANT_DB_PATH, USER_TIMEZONE, OPENAI_API_KEY, OPENAI_CHAT_MODEL
+from openai_client import client
+from config import ASSISTANT_DB_PATH, USER_TIMEZONE, OPENAI_CHAT_MODEL
 
 logger = logging.getLogger(__name__)
 
 TZ = ZoneInfo(USER_TIMEZONE)
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 SCENARIOS = [
     {
@@ -331,7 +330,7 @@ SCENARIOS = [
 
 
 def init_thinking_db() -> None:
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS thinking_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -351,7 +350,7 @@ def log_thinking_session(
     covered_pct: Optional[int] = None,
 ) -> None:
     today = datetime.now(TZ).strftime("%Y-%m-%d")
-    with sqlite3.connect(ASSISTANT_DB_PATH) as conn:
+    with db.connect() as conn:
         conn.execute(
             """INSERT INTO thinking_sessions
                (chat_id, date, scenario_id, wrote_plan, covered_pct)

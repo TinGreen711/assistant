@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from zoneinfo import ZoneInfo
 
+import db
 from config import ASSISTANT_DB_PATH, USER_TIMEZONE
 
 
@@ -17,10 +18,7 @@ def _now_str() -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return db.connect(DB_PATH)
 
 
 def _column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
