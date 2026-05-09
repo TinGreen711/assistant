@@ -16,6 +16,7 @@ def ensure_dirs() -> None:
     (ROOT / "decisions").mkdir(parents=True, exist_ok=True)
     (ROOT / "summaries").mkdir(parents=True, exist_ok=True)
     (ROOT / "summaries" / "weekly").mkdir(parents=True, exist_ok=True)
+    (ROOT / "captures").mkdir(parents=True, exist_ok=True)
 
 
 def _today_str() -> str:

@@ -128,6 +128,7 @@ from flashcards import (
 from stats import build_stats_text, build_weekly_report_text
 from xp import init_xp_db, add_xp, format_levelup
 from achievements import init_achievements_db, check_and_unlock, format_achievement, format_daily_xp
+from capture import save_capture, CAPTURE_TYPES
 
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -172,6 +173,20 @@ def build_failure_reason_keyboard(buttons: list[str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def build_capture_type_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="💡 Идея", callback_data="cap_type_idea"),
+            InlineKeyboardButton(text="📚 Изучено", callback_data="cap_type_learned"),
+        ],
+        [
+            InlineKeyboardButton(text="🧠 Мысль", callback_data="cap_type_thought"),
+            InlineKeyboardButton(text="💬 Цитата", callback_data="cap_type_quote"),
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
 def build_main_menu_keyboard(gilfoyle: bool = False) -> InlineKeyboardMarkup:
     gilfoyle_label = "👤 Обычный режим" if gilfoyle else "🤖 Режим Гилфойла"
     gilfoyle_cmd = "cmd_gilfoyle_off" if gilfoyle else "cmd_gilfoyle_on"
@@ -191,6 +206,7 @@ def build_main_menu_keyboard(gilfoyle: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🧠 /think", callback_data="cmd_think"),
          InlineKeyboardButton(text="📊 Weekly", callback_data="cmd_weekly"),
          InlineKeyboardButton(text="🧠 Strategy", callback_data="cmd_strategy")],
+        [InlineKeyboardButton(text="📝 Записать мысль", callback_data="cmd_capture")],
         [InlineKeyboardButton(text="🔔 Proactive on", callback_data="cmd_proactive_on"),
          InlineKeyboardButton(text="🔕 off", callback_data="cmd_proactive_off"),
          InlineKeyboardButton(text=gilfoyle_label, callback_data=gilfoyle_cmd)],
@@ -881,6 +897,15 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await send_main_menu(update.message, update.effective_chat.id)
 
 
+async def capture_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    await update.message.reply_text(
+        "Что хочешь зафиксировать в Obsidian?",
+        reply_markup=build_capture_type_keyboard(),
+    )
+
+
 async def think_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
@@ -1100,6 +1125,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 f"Вектор: {user_text}"
             )
             await send_main_menu(update.message, update.effective_chat.id)
+            return
+
+        if active_stage == "await_capture_text":
+            capture_type = context.user_data.pop("capture_type", "thought")
+            path = save_capture(user_text, capture_type)
+            icon, label = CAPTURE_TYPES.get(capture_type, ("📝", "Заметка"))
+            update_session_state(chat_id, active_stage="")
+            await update.message.reply_text(
+                f"{icon} Сохранено!\n\n"
+                f"Тип: {label}\n"
+                f"Файл: captures/{path.name}"
+            )
             return
 
     await send_action_options(
@@ -1501,6 +1538,16 @@ async def handle_result_choice(
         chat_id=query.message.chat.id,
         note_type="lesson",
         content=f"{selected_option} → {review['lesson']}",
+    )
+
+    lesson_text = f"{selected_option} → {review['lesson']}"
+    context.user_data["pending_lesson_capture"] = lesson_text
+    await query.message.reply_text(
+        "Сохранить вывод в Obsidian?",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(text="📝 Сохранить", callback_data="cap_save_lesson_"),
+            InlineKeyboardButton(text="Пропустить", callback_data="cap_skip_lesson"),
+        ]]),
     )
 
     if mode == "learning":
@@ -1964,6 +2011,40 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await send_main_menu(query.message, chat_id)
         return
 
+    if data == "cmd_capture":
+        await query.message.reply_text(
+            "Что хочешь зафиксировать в Obsidian?",
+            reply_markup=build_capture_type_keyboard(),
+        )
+        return
+
+    if data.startswith("cap_type_"):
+        capture_type = data[len("cap_type_"):]
+        if capture_type not in CAPTURE_TYPES:
+            await query.answer("Неизвестный тип")
+            return
+        context.user_data["capture_type"] = capture_type
+        update_session_state(query.message.chat.id, active_stage="await_capture_text")
+        icon, label = CAPTURE_TYPES[capture_type]
+        await query.edit_message_text(f"{icon} {label} — пиши:")
+        return
+
+    if data.startswith("cap_save_lesson_"):
+        lesson_text = context.user_data.pop("pending_lesson_capture", "")
+        if lesson_text:
+            path = save_capture(lesson_text, "learned")
+            await query.edit_message_text(
+                f"📚 Сохранено!\nФайл: captures/{path.name}"
+            )
+        else:
+            await query.edit_message_text("Нечего сохранять.")
+        return
+
+    if data == "cap_skip_lesson":
+        context.user_data.pop("pending_lesson_capture", None)
+        await query.edit_message_text("Окей, пропускаем.")
+        return
+
     if data.startswith("plan_"):
         await handle_plan_flow_callback(query, context)
         return
@@ -2032,6 +2113,7 @@ def main() -> None:
     app.add_handler(CommandHandler("gilfoyle_on", gilfoyle_on_command))
     app.add_handler(CommandHandler("gilfoyle_off", gilfoyle_off_command))
     app.add_handler(CommandHandler("menu", menu_command))
+    app.add_handler(CommandHandler("capture", capture_command))
     app.add_handler(CommandHandler("quiz", quiz_command))
     app.add_handler(CommandHandler("task", task_command))
     app.add_handler(CommandHandler("think", think_command))
