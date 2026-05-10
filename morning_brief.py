@@ -244,7 +244,7 @@ def _format_progress_fact(chat_id: int) -> str:
     return ""
 
 
-def build_morning_brief(chat_id: int, gilfoyle: bool = False) -> str:
+def build_morning_brief(chat_id: int) -> str:
     last = _get_last_session(chat_id)
 
     if not last:
@@ -262,17 +262,6 @@ def build_morning_brief(chat_id: int, gilfoyle: bool = False) -> str:
     progress = _format_progress_fact(chat_id)
 
     weak = _get_weak_topics(chat_id)
-
-    if gilfoyle:
-        lines = []
-        when = "Сегодня" if days_ago == 0 else ("Вчера" if days_ago == 1 else f"{days_ago} дн. назад")
-        lines.append(f"Последнее: {label} ({when}).")
-        lines.append(f"Сегодня: {task['task']}")
-        lines.append(f"{word['word']} — {word['translation']}. \"{word['example']}\"")
-        if weak:
-            w = weak[0]
-            lines.append(f"Слабо: {w['label']} — {w['hint']}. Иди учи.")
-        return "\n".join(lines)
 
     lines = []
 

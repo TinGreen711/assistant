@@ -108,7 +108,7 @@ def _fmt_eta(months_remaining: float | None) -> str:
     return f"~{m} мес."
 
 
-def format_path(chat_id: int, gilfoyle: bool = False) -> str:
+def format_path(chat_id: int) -> str:
     from xp import format_xp_status
     from sre_roadmap import get_current_skill
     s = get_path_stats(chat_id)
@@ -125,9 +125,8 @@ def format_path(chat_id: int, gilfoyle: bool = False) -> str:
     bar_lines.append("─" * (lw + 2 + BAR_W + 8))
     bar_lines.append(row("Итого", s["readiness_pct"]))
 
-    header = "📍 Путь к Junior SRE" if gilfoyle else "🗺 Путь к Junior SRE"
     lines = [
-        header,
+        "🗺 Путь к Junior SRE",
         format_xp_status(chat_id),
         "",
         "```",
@@ -136,25 +135,16 @@ def format_path(chat_id: int, gilfoyle: bool = False) -> str:
     ]
 
     eta = _fmt_eta(s["months_remaining"])
-    if gilfoyle:
-        lines.append(f"Темп: {eta}")
-        if s["next_focus"]:
-            nf = s["next_focus"]
-            skill = get_current_skill(chat_id, nf["key"])
-            skill_suffix = f" → {skill['label']}" if skill else ""
-            lines.append(f"Фокус: {nf['label']}{skill_suffix} ({nf['remaining']} сес.)")
-    else:
-        lines.append(f"⏱ При текущем темпе: {eta}")
-        if s["next_focus"]:
-            nf = s["next_focus"]
-            skill = get_current_skill(chat_id, nf["key"])
-            skill_suffix = f" → скилл «{skill['label']}»" if skill else ""
-            lines.append(f"🎯 Следующий фокус: {nf['label']}{skill_suffix} — ещё {nf['remaining']} сессий")
+    lines.append(f"⏱ При текущем темпе: {eta}")
+    if s["next_focus"]:
+        nf = s["next_focus"]
+        skill = get_current_skill(chat_id, nf["key"])
+        skill_suffix = f" → скилл «{skill['label']}»" if skill else ""
+        lines.append(f"🎯 Следующий фокус: {nf['label']}{skill_suffix} — ещё {nf['remaining']} сессий")
 
-    # Текущий скилл по главной теме
     if s["next_focus"]:
         skill = get_current_skill(chat_id, s["next_focus"]["key"])
-        if skill and not gilfoyle:
+        if skill:
             lines.append(f"📌 Сейчас: {skill['label']} — {skill['criteria']}")
 
     return "\n".join(lines)

@@ -87,7 +87,6 @@ def init_state_db() -> None:
             "morning_minute": f"INTEGER DEFAULT {DEFAULT_MORNING_MINUTE}",
             "evening_hour": f"INTEGER DEFAULT {DEFAULT_EVENING_HOUR}",
             "evening_minute": f"INTEGER DEFAULT {DEFAULT_EVENING_MINUTE}",
-            "gilfoyle_mode": "INTEGER DEFAULT 0",
         }
 
         for column_name, column_type in new_columns.items():
@@ -121,7 +120,6 @@ _ALLOWED_FIELDS = frozenset({
     "month_key", "monthly_focus_domain", "monthly_focus_text", "monthly_focus_set",
     "proactive_enabled", "morning_hour", "morning_minute",
     "evening_hour", "evening_minute",
-    "gilfoyle_mode",
 })
 
 
@@ -319,18 +317,9 @@ def build_long_horizon_context(chat_id: int) -> Dict[str, Any]:
     }
 
 
-def set_gilfoyle_mode(chat_id: int, enabled: bool) -> None:
-    update_session_state(chat_id=chat_id, gilfoyle_mode=1 if enabled else 0)
-
-
-def get_gilfoyle_mode(chat_id: int) -> bool:
-    state = get_session_state(chat_id) or {}
-    return bool(state.get("gilfoyle_mode", 0))
-
-
 def clear_session_state(chat_id: int) -> None:
     """Сбрасывает только активную сессию: текущий запрос/действие/фокус дня.
-    Долгосрочные настройки (цели недели/месяца, расписание, гилфойл) сохраняются."""
+    Долгосрочные настройки (цели недели/месяца, расписание) сохраняются."""
     with _connect() as conn:
         conn.execute(
             """

@@ -9,7 +9,7 @@ from strategy_profile import build_strategy_profile
 from domains import assess_domain_alignment, DOMAINS
 from study_tracker import get_streak, studied_today, get_days_idle
 from morning_brief import build_morning_brief
-from state import get_gilfoyle_mode
+
 from achievements import format_daily_xp
 from skills_path import get_avg_daily_readiness_delta, format_path_short
 
@@ -25,41 +25,26 @@ def build_checkin(chat_id: int) -> Dict[str, Any]:
     state = get_session_state(chat_id) or {}
     horizon = build_long_horizon_context(chat_id)
     strategy = build_strategy_profile(chat_id=chat_id, limit=50)
-    gilfoyle = get_gilfoyle_mode(chat_id)
-
     streak = get_streak(chat_id)
 
-    if gilfoyle:
-        parts = ["🤖 Check-in"]
-        parts.append(f"Стрик: {streak} дн." if streak > 0 else "Стрик: 0.")
-        if horizon["weekly_active"]:
-            parts.append(f"Цель недели: {horizon['weekly_text']}")
-        if state.get("current_day") == _today_str() and state.get("daily_plan_done"):
-            parts.append(f"Фокус: {state.get('daily_focus_text', '')}")
-        else:
-            parts.append("Плана нет. Исправь.")
-        brief = build_morning_brief(chat_id, gilfoyle=True)
-        if brief:
-            parts.append(brief)
+    parts = ["☀️ Check-in"]
+    if streak > 0:
+        parts.append(f"🔥 Стрик обучения: {streak} дн. подряд")
     else:
-        parts = ["☀️ Check-in"]
-        if streak > 0:
-            parts.append(f"🔥 Стрик обучения: {streak} дн. подряд")
-        else:
-            parts.append("📚 Сессий обучения пока нет — хороший день начать")
-        if horizon["weekly_active"]:
-            parts.append(f"Цель недели: {horizon['weekly_text']}")
-        if horizon["monthly_active"]:
-            parts.append(f"Вектор месяца: {horizon['monthly_text']}")
-        if state.get("current_day") == _today_str() and state.get("daily_plan_done"):
-            parts.append(f"Фокус дня уже задан: {state.get('daily_focus_text', '')}")
-            parts.append("Сегодня лучше не распыляться и двигать главный фокус.")
-        else:
-            parts.append("План дня на сегодня ещё не задан.")
-            parts.append("Лучший следующий шаг — сделать план дня и зафиксировать главный фокус.")
-        brief = build_morning_brief(chat_id, gilfoyle=False)
-        if brief:
-            parts.append(brief)
+        parts.append("📚 Сессий обучения пока нет — хороший день начать")
+    if horizon["weekly_active"]:
+        parts.append(f"Цель недели: {horizon['weekly_text']}")
+    if horizon["monthly_active"]:
+        parts.append(f"Вектор месяца: {horizon['monthly_text']}")
+    if state.get("current_day") == _today_str() and state.get("daily_plan_done"):
+        parts.append(f"Фокус дня уже задан: {state.get('daily_focus_text', '')}")
+        parts.append("Сегодня лучше не распыляться и двигать главный фокус.")
+    else:
+        parts.append("План дня на сегодня ещё не задан.")
+        parts.append("Лучший следующий шаг — сделать план дня и зафиксировать главный фокус.")
+    brief = build_morning_brief(chat_id)
+    if brief:
+        parts.append(brief)
 
     prompt_hints = (
         "Утренний check-in пользователя. "
@@ -195,20 +180,14 @@ def build_midday_nudge(chat_id: int) -> Dict[str, Any] | None:
     if studied_today(chat_id):
         return None
 
-    gilfoyle = get_gilfoyle_mode(chat_id)
     days_idle = get_days_idle(chat_id)
-
-    if gilfoyle:
-        cost = _cost_text(chat_id, days_idle) if days_idle >= 2 else ""
-        text = f"14:00. Сессии обучения нет. /study\n{cost}".strip()
-    else:
-        cost = _cost_text(chat_id, days_idle) if days_idle >= 2 else ""
-        text = (
-            "📚 Уже 14:00, а учебной сессии сегодня ещё не было.\n"
-            "Даже 15 минут считается — нажми /study и залогируй."
-        )
-        if cost:
-            text += f"\n\n{cost}"
+    cost = _cost_text(chat_id, days_idle) if days_idle >= 2 else ""
+    text = (
+        "📚 Уже 14:00, а учебной сессии сегодня ещё не было.\n"
+        "Даже 15 минут считается — нажми /study и залогируй."
+    )
+    if cost:
+        text += f"\n\n{cost}"
 
     return {"text": text}
 
@@ -218,27 +197,22 @@ def build_streak_guard(chat_id: int) -> Dict[str, Any] | None:
     if studied_today(chat_id):
         return None
 
-    gilfoyle = get_gilfoyle_mode(chat_id)
     streak = get_streak(chat_id)
     days_idle = get_days_idle(chat_id)
     cost = _cost_text(chat_id, days_idle) if days_idle >= 2 else ""
 
-    if gilfoyle:
-        base = f"18:20. Стрик {streak} дн. сгорит в полночь. /study" if streak > 0 else "18:20. Сессии нет. /study"
-        text = f"{base}\n{cost}".strip() if cost else base
+    if streak > 0:
+        text = (
+            f"⚠️ 18:20 — до полуночи ещё есть время.\n"
+            f"Стрик {streak} дн. сгорит если не залогировать сессию сегодня.\n"
+            "Открой /study — даже одна тема засчитывается."
+        )
     else:
-        if streak > 0:
-            text = (
-                f"⚠️ 18:20 — до полуночи ещё есть время.\n"
-                f"Стрик {streak} дн. сгорит если не залогировать сессию сегодня.\n"
-                "Открой /study — даже одна тема засчитывается."
-            )
-        else:
-            text = (
-                "🌆 18:20 — день ещё не закончен.\n"
-                "Учебной сессии сегодня не было. Самое время начать — /study"
-            )
-        if cost:
-            text += f"\n\n{cost}"
+        text = (
+            "🌆 18:20 — день ещё не закончен.\n"
+            "Учебной сессии сегодня не было. Самое время начать — /study"
+        )
+    if cost:
+        text += f"\n\n{cost}"
 
     return {"text": text}

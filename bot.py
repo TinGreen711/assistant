@@ -58,8 +58,6 @@ from state import (
     set_proactive_settings,
     get_proactive_settings,
     list_proactive_enabled_sessions,
-    set_gilfoyle_mode,
-    get_gilfoyle_mode,
 )
 from outcomes import (
     init_outcomes_db,
@@ -215,9 +213,7 @@ def resolve_now_action(chat_id: int) -> tuple[str, str]:
     return "🃏 Флешкарты", "cmd_flash"
 
 
-def build_full_menu_keyboard(gilfoyle: bool = False) -> InlineKeyboardMarkup:
-    gilfoyle_label = "👤 Обычный режим" if gilfoyle else "🤖 Режим Гилфойла"
-    gilfoyle_cmd = "cmd_gilfoyle_off" if gilfoyle else "cmd_gilfoyle_on"
+def build_full_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="🗓 План дня", callback_data="cmd_plan"),
          InlineKeyboardButton(text="☀️ Check-in", callback_data="cmd_checkin")],
@@ -237,17 +233,13 @@ def build_full_menu_keyboard(gilfoyle: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🗺 /quest", callback_data="cmd_quest"),
          InlineKeyboardButton(text="📝 Записать мысль", callback_data="cmd_capture")],
         [InlineKeyboardButton(text="🔔 Proactive on", callback_data="cmd_proactive_on"),
-         InlineKeyboardButton(text="🔕 off", callback_data="cmd_proactive_off"),
-         InlineKeyboardButton(text=gilfoyle_label, callback_data=gilfoyle_cmd)],
+         InlineKeyboardButton(text="🔕 off", callback_data="cmd_proactive_off")],
         [InlineKeyboardButton(text="♻️ Сбросить сессию", callback_data="cmd_reset")],
     ]
     return InlineKeyboardMarkup(rows)
 
 
-def build_main_menu_keyboard(gilfoyle: bool = False, chat_id: int | None = None) -> InlineKeyboardMarkup:
-    gilfoyle_label = "👤 Обычный режим" if gilfoyle else "🤖 Режим Гилфойла"
-    gilfoyle_cmd = "cmd_gilfoyle_off" if gilfoyle else "cmd_gilfoyle_on"
-
+def build_main_menu_keyboard(chat_id: int | None = None) -> InlineKeyboardMarkup:
     if chat_id is not None:
         now_label, now_cmd = resolve_now_action(chat_id)
     else:
@@ -257,8 +249,7 @@ def build_main_menu_keyboard(gilfoyle: bool = False, chat_id: int | None = None)
         [InlineKeyboardButton(text=now_label, callback_data=now_cmd)],
         [InlineKeyboardButton(text="📊 Прогресс", callback_data="cmd_path"),
          InlineKeyboardButton(text="📝 Записать мысль", callback_data="cmd_capture")],
-        [InlineKeyboardButton(text="☰ Все команды", callback_data="cmd_more"),
-         InlineKeyboardButton(text=gilfoyle_label, callback_data=gilfoyle_cmd)],
+        [InlineKeyboardButton(text="☰ Все команды", callback_data="cmd_more")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -503,10 +494,9 @@ async def transcribe_voice(file_path: str) -> str:
 
 
 async def send_main_menu(message_target, chat_id: int | None = None) -> None:
-    gf = get_gilfoyle_mode(chat_id) if chat_id else False
     await message_target.reply_text(
         "Главное меню:",
-        reply_markup=build_main_menu_keyboard(gilfoyle=gf, chat_id=chat_id),
+        reply_markup=build_main_menu_keyboard(chat_id=chat_id),
     )
 
 
@@ -714,7 +704,6 @@ async def send_action_options(
     data = generate_options(
         user_text,
         extra_hints=combined_hints,
-        gilfoyle_mode=get_gilfoyle_mode(message_target.chat.id),
         chat_id=message_target.chat.id,
     )
     mode = str(data.get("mode", pre_mode)).strip() or pre_mode
@@ -923,8 +912,7 @@ async def study_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def path_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
-    gf = get_gilfoyle_mode(update.effective_chat.id)
-    text = format_path(update.effective_chat.id, gilfoyle=gf)
+    text = format_path(update.effective_chat.id)
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
@@ -933,26 +921,6 @@ async def progress_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     chart = build_progress_chart(update.effective_chat.id, days=7)
     await update.message.reply_text(chart, parse_mode="Markdown")
-
-
-async def gilfoyle_on_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message:
-        return
-    chat_id = update.effective_chat.id
-    set_gilfoyle_mode(chat_id, True)
-    await update.message.reply_text(
-        "🤖 Режим Гилфойла включён.\nНикакой мотивации. Только факты."
-    )
-    await send_main_menu(update.message, chat_id)
-
-
-async def gilfoyle_off_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message:
-        return
-    chat_id = update.effective_chat.id
-    set_gilfoyle_mode(chat_id, False)
-    await update.message.reply_text("👤 Обычный режим включён.")
-    await send_main_menu(update.message, chat_id)
 
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1169,8 +1137,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 return
 
             await update.message.chat.send_action(ChatAction.TYPING)
-            gf = get_gilfoyle_mode(chat_id)
-            evaluation = evaluate_user_plan(user_text, scenario, gilfoyle=gf)
+            evaluation = evaluate_user_plan(user_text, scenario)
 
             update_session_state(chat_id, active_stage="")
             log_thinking_session(
@@ -1818,8 +1785,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if data == "cmd_more":
-        gf = get_gilfoyle_mode(query.message.chat.id)
-        await query.message.reply_text("Все команды:", reply_markup=build_full_menu_keyboard(gilfoyle=gf))
+        await query.message.reply_text("Все команды:", reply_markup=build_full_menu_keyboard())
         return
 
     if data == "cmd_plan":
@@ -1888,8 +1854,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if data == "cmd_path":
-        gf = get_gilfoyle_mode(query.message.chat.id)
-        text = format_path(query.message.chat.id, gilfoyle=gf)
+        text = format_path(query.message.chat.id)
         await query.message.reply_text(text, parse_mode="Markdown")
         return
 
@@ -2106,20 +2071,6 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await send_quiz_question(query.message, context)
         return
 
-    if data == "cmd_gilfoyle_on":
-        chat_id = query.message.chat.id
-        set_gilfoyle_mode(chat_id, True)
-        await query.message.reply_text("🤖 Режим Гилфойла включён. Никакой мотивации. Только факты.")
-        await send_main_menu(query.message, chat_id)
-        return
-
-    if data == "cmd_gilfoyle_off":
-        chat_id = query.message.chat.id
-        set_gilfoyle_mode(chat_id, False)
-        await query.message.reply_text("👤 Обычный режим включён.")
-        await send_main_menu(query.message, chat_id)
-        return
-
     if data == "cmd_proactive_on":
         chat_id = query.message.chat.id
         set_proactive_settings(chat_id, enabled=True)
@@ -2275,8 +2226,6 @@ def main() -> None:
     app.add_handler(CommandHandler("study", study_command))
     app.add_handler(CommandHandler("path", path_command))
     app.add_handler(CommandHandler("progress", progress_command))
-    app.add_handler(CommandHandler("gilfoyle_on", gilfoyle_on_command))
-    app.add_handler(CommandHandler("gilfoyle_off", gilfoyle_off_command))
     app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("capture", capture_command))
     app.add_handler(CommandHandler("quest", quest_command))

@@ -384,13 +384,8 @@ def format_full_breakdown(scenario: Dict[str, Any]) -> str:
 def evaluate_user_plan(
     user_plan: str,
     scenario: Dict[str, Any],
-    gilfoyle: bool = False,
 ) -> str:
-    tone = (
-        "Отвечай как Гилфойл из Silicon Valley — сухо, без похвал, только факты и что упущено."
-        if gilfoyle
-        else "Отвечай как опытный SRE-ментор — конкретно, честно, без лишней мотивации."
-    )
+    tone = "Отвечай как опытный SRE-ментор — конкретно, честно, без лишней мотивации."
 
     prompt = f"""Ты оцениваешь план диагностики Junior SRE.
 

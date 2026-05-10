@@ -17,14 +17,6 @@ from router import classify_request
 from protocols import build_protocol_prompt, get_protocol
 
 
-GILFOYLE_PROMPT = """
-Ты Гилфойл. Без мотивации. Без восклицаний. Без похвал.
-Только факты и конкретные действия.
-Если плохо — говоришь прямо. Если хорошо — тоже прямо.
-Три варианта. Коротко. По делу.
-Верни только JSON по схеме.
-""".strip()
-
 SYSTEM_PROMPT = """
 Ты личный ассистент по продуктивности и планомерному развитию.
 
@@ -330,11 +322,10 @@ def _build_prompt(user_text: str, extra_hints: str = "") -> tuple[str, Dict]:
     return prompt, route
 
 
-def _try_structured_response(prompt: str, gilfoyle_mode: bool = False) -> Optional[Dict]:
-    system = GILFOYLE_PROMPT if gilfoyle_mode else SYSTEM_PROMPT
+def _try_structured_response(prompt: str) -> Optional[Dict]:
     response = client.responses.create(
         model=OPENAI_CHAT_MODEL,
-        instructions=system,
+        instructions=SYSTEM_PROMPT,
         input=prompt,
         text={
             "format": {
@@ -352,11 +343,10 @@ def _try_structured_response(prompt: str, gilfoyle_mode: bool = False) -> Option
     return _extract_json(raw)
 
 
-def _try_plain_response(prompt: str, gilfoyle_mode: bool = False) -> Optional[Dict]:
-    system = GILFOYLE_PROMPT if gilfoyle_mode else SYSTEM_PROMPT
+def _try_plain_response(prompt: str) -> Optional[Dict]:
     response = client.responses.create(
         model=OPENAI_CHAT_MODEL,
-        instructions=system,
+        instructions=SYSTEM_PROMPT,
         input=prompt,
         max_output_tokens=MAX_OUTPUT_TOKENS,
         store=False,
@@ -416,7 +406,7 @@ def _build_learning_options(chat_id: int) -> Dict:
     }
 
 
-def generate_options(user_text: str, extra_hints: str = "", gilfoyle_mode: bool = False, chat_id: int | None = None) -> Dict:
+def generate_options(user_text: str, extra_hints: str = "", chat_id: int | None = None) -> Dict:
     prompt, route = _build_prompt(user_text, extra_hints=extra_hints)
     mode = route["mode"]
 
@@ -424,14 +414,14 @@ def generate_options(user_text: str, extra_hints: str = "", gilfoyle_mode: bool 
         return _build_learning_options(chat_id)
 
     try:
-        data = _try_structured_response(prompt, gilfoyle_mode=gilfoyle_mode)
+        data = _try_structured_response(prompt)
         if data:
             return _postprocess(data, mode, user_text)
     except Exception:
         logger.exception("generate_options: structured response failed")
 
     try:
-        data = _try_plain_response(prompt, gilfoyle_mode=gilfoyle_mode)
+        data = _try_plain_response(prompt)
         if data:
             return _postprocess(data, mode, user_text)
     except Exception:
