@@ -61,7 +61,7 @@ A single-user Telegram bot with two purposes: productivity advisor (suggests 3 n
 **Voice messages:** `handle_voice` transcribes with `OPENAI_TRANSCRIBE_MODEL`, then feeds text through the same flow as text messages.
 
 **State and persistence:**
-- `state.py` — SQLite session state per `chat_id`: active mode/request/action, daily plan, weekly/monthly goals, proactive settings, Gilfoyle mode
+- `state.py` — SQLite session state per `chat_id`: active mode/request/action, daily plan, weekly/monthly goals, proactive settings
 - `memory.py` — Obsidian markdown under `OBSIDIAN_ROOT`: profile goals/constraints, daily logs, decisions, weekly summaries — fed into the AI prompt as long-term context
 - `session_memory.py` — short-term notes in SQLite (`lesson`, `closing`, `plan`, `study` types); last 7 days injected into AI prompt
 - `data/bot_persistence.pkl` — python-telegram-bot `PicklePersistence` for PTB-internal conversation state
@@ -74,7 +74,9 @@ A single-user Telegram bot with two purposes: productivity advisor (suggests 3 n
 - `protocols.py` — per-mode `Protocol` dataclass: allowed/forbidden actions, completion buttons, `max_depth`
 - `adaptation.py` — `build_adaptation_hints()`, `filter_options()`, `complete_options()`
 - `outcomes.py` — `log_outcome()`, `get_recent_outcomes()`, `build_outcome_hints()`
-- `brain.py` — `generate_options()`, `SYSTEM_PROMPT`, `GILFOYLE_PROMPT`, `JSON_SCHEMA`; Gilfoyle mode is toggled globally per chat. Uses the **OpenAI Responses API** (`client.responses.create`), not Chat Completions — params are `instructions`/`input`, response is `.output_text`. Do not refactor to `chat.completions.create`. Three-tier fallback: structured JSON schema → plain text extraction → static `_fallback_by_mode()`
+- `brain.py` — `generate_options()`, `SYSTEM_PROMPT`, `JSON_SCHEMA`. Uses the **OpenAI Responses API** (`client.responses.create`), not Chat Completions — params are `instructions`/`input`, response is `.output_text`. Do not refactor to `chat.completions.create`. Three-tier fallback: structured JSON schema → plain text extraction → static `_fallback_by_mode()`
+- `openai_client.py` — singleton `client = OpenAI(...)` with 60 s timeout and 2 retries; import this, never instantiate `OpenAI` elsewhere
+- `db.py` — `connect()` factory: opens `ASSISTANT_DB_PATH` with WAL mode, busy timeout, and `row_factory=sqlite3.Row`; all modules use this instead of calling `sqlite3.connect()` directly
 
 **Daily / weekly flow:**
 - `priority_engine.py` — `build_daily_plan()`, `build_focus_hints()` using energy/time inputs
@@ -96,6 +98,8 @@ A single-user Telegram bot with two purposes: productivity advisor (suggests 3 n
 - `xp.py` — XP per source type, 7-level SRE progression (Стажёр → Senior SRE)
 - `achievements.py` — badges for milestones (streaks, XP thresholds, first completions per module)
 - `stats.py` — aggregates all learning data into `/stats` and weekly report
+- `quests.py` — multi-step quest chains (e.g. "Linux с нуля", "Docker за неделю"); `init_quests_db()`, `start_quest()`, `complete_quest_step()`, `get_active_quest()`; callback prefix `quest_*`
+- `sre_roadmap.py` — fine-grained skill map (25–35 sessions per skill) used by `brain.py` and `skills_path.py` to surface the current in-progress skill via `get_current_skill()`
 
 **Post-action review:**
 - `review.py` — `classify_result()` (keyword-based Russian text → `success`/`partial`/`blocked`/`unclear`), `build_review()` (generates summary, lesson, next direction, and `next_prompt` string). In `bot.py` the `next_prompt` is combined with `build_outcome_hints()` and passed as `user_text` directly into `generate_options()` to produce the next set of action buttons
